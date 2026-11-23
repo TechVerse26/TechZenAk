@@ -1,0 +1,76 @@
+{
+  "schema": 1,
+  "note": "What goes into the standalone Android bundle (build/www). Edit this file instead of the build script.",
+  "include": {
+    "files": [
+      "index.html",
+      "app-config.js",
+      "privacy.html",
+      "terms.html",
+      "account-deletion.html"
+    ],
+    "dirs": [
+      "js",
+      "css",
+      "app",
+      "assets",
+      "icons"
+    ]
+  },
+  "exclude": [
+    {
+      "path": "icons/banner-donate.webp",
+      "reason": "not referenced by any code (the donation banner image comes from the optional imageUrl setting); about 2 MB"
+    },
+    {
+      "path": "icons/donation-banner-with-text.png",
+      "reason": "not referenced by any code; about 390 KB"
+    }
+  ],
+  "excludeGlobs": [
+    "**/*.map",
+    "**/.DS_Store",
+    "**/Thumbs.db"
+  ],
+  "extraVendor": [
+    {
+      "url": "https://cdnjs.cloudflare.com/ajax/libs/qrcode/1.5.3/qrcode.min.js",
+      "why": "QR code of the 2-step-verification setup (js/totp.js loads it lazily; inside the app only this local copy is used)"
+    }
+  ],
+  "removeFromIndex": [
+    {
+      "tag": "link",
+      "rel": "manifest",
+      "why": "the app is not an installable website and manifest.json is not part of the bundle"
+    }
+  ],
+  "optionalOnlineHosts": [
+    "api.alquran.cloud",
+    "cdn.islamic.network",
+    "server11.mp3quran.net",
+    "api.aladhan.com",
+    "cdn.jsdelivr.net",
+    "quranbangla.vercel.app",
+    "rupshajf.vercel.app",
+    "tvcourse.vercel.app",
+    "ipapi.co",
+    "ipwho.is",
+    "www.google.com",
+    "api.emailjs.com",
+    "www.emailjs.com",
+    "console.firebase.google.com",
+    "facebook.com",
+    "youtube.com",
+    "www.w3.org",
+    "firestore.googleapis.com",
+    "identitytoolkit.googleapis.com",
+    "securetoken.googleapis.com",
+    "your-foundation-site.example"
+  ],
+  "websiteOnlyHosts": [
+    "cdnjs.cloudflare.com",
+    "unpkg.com"
+  ],
+  "websiteOnlyHostsNote": "Only reached by website code paths (js/totp.js CDN fallbacks). Inside the app the QR library comes from the bundle (extraVendor)."
+}
