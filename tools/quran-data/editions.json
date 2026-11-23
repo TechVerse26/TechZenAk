@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "source": {
+    "name": "Al Quran Cloud",
+    "baseUrl": "https://api.alquran.cloud/v1",
+    "note": "The same source the website reads at run time (API constant in js/data.js). Text is copied unchanged."
+  },
+  "arabic": ["quran-uthmani", "quran-simple-clean"],
+  "translations": ["bn.bengali", "en.sahih"],
+  "structureEdition": "quran-uthmani",
+  "maxEmptyAyahs": 0
+}
