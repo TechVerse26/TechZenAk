@@ -1,0 +1,27 @@
+{
+  "//": "TypeScript for NEW application logic (the existing JavaScript stays JavaScript and keeps working). Output is a classic <script> file: js/quran-native.js.",
+  "compilerOptions": {
+    "target": "ES2017",
+    "lib": [
+      "ES2017",
+      "DOM"
+    ],
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "forceConsistentCasingInFileNames": true,
+    "removeComments": false,
+    "newLine": "lf",
+    "rootDir": "src/native",
+    "outDir": "js",
+    "types": [],
+    "moduleDetection": "legacy"
+  },
+  "include": [
+    "src/native/**/*.ts"
+  ]
+}

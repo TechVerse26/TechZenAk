@@ -1,0 +1,22 @@
+{
+  "name": "quranbangla-api",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Vercel serverless functions (api/) for কুরআন বাংলা — এই ফাইলটা root এ থাকলেই Vercel deploy করার সময় নিচের প্যাকেজগুলো নিজে থেকে install করে নেবে।",
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "test:ui": "node --test tests/ui/ui.test.js",
+    "build:web": "node scripts/web/build-web.mjs",
+    "audit:web": "node scripts/web/audit-launch.mjs build/www",
+    "test:web": "node --test tests/web-vendor.test.js tests/web-build.test.js tests/local-data.test.js tests/standalone-net.test.js tests/api-cors.test.js tests/prayer-calc.test.js tests/native-bridge.test.js tests/native-overlay.test.js tests/tasbih.test.js && python3 -m unittest discover -s tools/quran-data -p 'test_*.py'",
+    "test:android-build": "node android-build/self-test.mjs",
+    "build:ts": "tsc -p tsconfig.json",
+    "lint:native": "node android-build/native-lint.mjs"
+  },
+  "dependencies": {
+    "firebase-admin": "^12.6.0"
+  },
+  "allowScripts": {
+    "protobufjs": false
+  }
+}
