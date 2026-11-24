@@ -1,1 +1,13 @@
-
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="qw_next_prayer_label">পরবর্তী নামাজ</string>
+    <string name="qw_next_prayer_description">পরবর্তী নামাজের সময় ও সরাসরি কাউন্টডাউন।</string>
+    <string name="qw_daily_ayah_label">আজকের আয়াত</string>
+    <string name="qw_daily_ayah_description">প্রতিদিনের একটি আয়াত অনুবাদসহ। ট্যাপ করলে অ্যাপে খুলবে।</string>
+    <string name="qw_continue_label">পড়া চালিয়ে যান</string>
+    <string name="qw_continue_description">সর্বশেষ পড়া সূরা, আয়াত ও আপনার অগ্রগতি।</string>
+    <string name="qw_quick_label">কুরআন শর্টকাট</string>
+    <string name="qw_quick_description">কুরআন, সার্চ, কিবলা ও তাসবিহ এক ট্যাপে।</string>
+    <string name="qw_reminder_label">দৈনিক লক্ষ্য ও রিমাইন্ডার</string>
+    <string name="qw_reminder_description">আপনার পড়ার লক্ষ্য, ধারাবাহিকতা ও পরবর্তী রিমাইন্ডার।</string>
+</resources>
