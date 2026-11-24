@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="qw_next_prayer_label">Next prayer</string>
+    <string name="qw_next_prayer_description">The next prayer time with a live countdown.</string>
+    <string name="qw_daily_ayah_label">Ayah of the day</string>
+    <string name="qw_daily_ayah_description">A daily ayah with its translation. Tap to open it in the app.</string>
+    <string name="qw_continue_label">Continue reading</string>
+    <string name="qw_continue_description">Your last read surah and ayah, and your progress.</string>
+    <string name="qw_quick_label">Quran shortcuts</string>
+    <string name="qw_quick_description">Quran, search, Qibla and tasbih in one tap.</string>
+    <string name="qw_reminder_label">Daily goal and reminders</string>
+    <string name="qw_reminder_description">Your reading goal, streak and the next reminder.</string>
+</resources>
