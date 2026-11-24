@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/qw_root" android:layout_width="match_parent" android:layout_height="match_parent"
+    android:background="@drawable/qw_widget_bg" android:orientation="horizontal" android:paddingBottom="8dp" android:paddingStart="8dp" android:paddingTop="8dp" android:paddingEnd="2dp">
+
+    <LinearLayout android:id="@+id/qw_quick_quran" android:layout_width="0dp" android:layout_height="match_parent" android:layout_marginEnd="6dp" android:layout_weight="1"
+        android:background="@drawable/qw_chip_bg" android:gravity="center" android:orientation="vertical" android:padding="6dp">
+        <ImageView android:layout_width="26dp" android:layout_height="26dp" android:contentDescription="@null" android:src="@drawable/ic_qw_quran" />
+        <TextView android:id="@+id/qw_quick_quran_label" android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:layout_marginTop="2dp" android:ellipsize="end" android:maxLines="1" android:textColor="@color/qw_text" android:textSize="11sp" />
+    </LinearLayout>
+    <LinearLayout android:id="@+id/qw_quick_search" android:layout_width="0dp" android:layout_height="match_parent" android:layout_marginEnd="6dp" android:layout_weight="1"
+        android:background="@drawable/qw_chip_bg" android:gravity="center" android:orientation="vertical" android:padding="6dp">
+        <ImageView android:layout_width="26dp" android:layout_height="26dp" android:contentDescription="@null" android:src="@drawable/ic_qw_search" />
+        <TextView android:id="@+id/qw_quick_search_label" android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:layout_marginTop="2dp" android:ellipsize="end" android:maxLines="1" android:textColor="@color/qw_text" android:textSize="11sp" />
+    </LinearLayout>
+    <LinearLayout android:id="@+id/qw_quick_qibla" android:layout_width="0dp" android:layout_height="match_parent" android:layout_marginEnd="6dp" android:layout_weight="1"
+        android:background="@drawable/qw_chip_bg" android:gravity="center" android:orientation="vertical" android:padding="6dp">
+        <ImageView android:layout_width="26dp" android:layout_height="26dp" android:contentDescription="@null" android:src="@drawable/ic_qw_qibla" />
+        <TextView android:id="@+id/qw_quick_qibla_label" android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:layout_marginTop="2dp" android:ellipsize="end" android:maxLines="1" android:textColor="@color/qw_text" android:textSize="11sp" />
+    </LinearLayout>
+    <LinearLayout android:id="@+id/qw_quick_tasbih" android:layout_width="0dp" android:layout_height="match_parent" android:layout_marginEnd="6dp" android:layout_weight="1"
+        android:background="@drawable/qw_chip_bg" android:gravity="center" android:orientation="vertical" android:padding="6dp">
+        <ImageView android:layout_width="26dp" android:layout_height="26dp" android:contentDescription="@null" android:src="@drawable/ic_qw_tasbih" />
+        <TextView android:id="@+id/qw_quick_tasbih_label" android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:layout_marginTop="2dp" android:ellipsize="end" android:maxLines="1" android:textColor="@color/qw_text" android:textSize="11sp" />
+    </LinearLayout>
+</LinearLayout>
