@@ -1,0 +1,47 @@
+<!-- Components of the native modules. Inserted into <application> by android-build/apply-native-patches.mjs (idempotent). -->
+
+        <!-- Home screen widgets: layouts res/layout/qw_widget_*.xml, metadata res/xml/qw_provider_*.xml -->
+        <receiver android:name="com.techverse.quranbangla.widgets.NextPrayerWidget" android:exported="false" android:label="@string/qw_next_prayer_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/qw_provider_next_prayer" />
+        </receiver>
+        <receiver android:name="com.techverse.quranbangla.widgets.DailyAyahWidget" android:exported="false" android:label="@string/qw_daily_ayah_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/qw_provider_daily_ayah" />
+        </receiver>
+        <receiver android:name="com.techverse.quranbangla.widgets.ContinueReadingWidget" android:exported="false" android:label="@string/qw_continue_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/qw_provider_continue" />
+        </receiver>
+        <receiver android:name="com.techverse.quranbangla.widgets.QuickActionsWidget" android:exported="false" android:label="@string/qw_quick_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/qw_provider_quick" />
+        </receiver>
+        <receiver android:name="com.techverse.quranbangla.widgets.ReminderStatusWidget" android:exported="false" android:label="@string/qw_reminder_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/qw_provider_reminder" />
+        </receiver>
+        <receiver android:name="com.techverse.quranbangla.widgets.WidgetTickReceiver" android:exported="false" />
+
+        <!-- Reminders: alarms land here; the boot receiver plans them again after a restart, an update, a time or time zone change -->
+        <receiver android:name="com.techverse.quranbangla.reminders.ReminderReceiver" android:exported="false" />
+        <receiver android:name="com.techverse.quranbangla.reminders.BootReceiver" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+                <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="android.intent.action.DATE_CHANGED" />
+                <action android:name="android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED" />
+            </intent-filter>
+        </receiver>

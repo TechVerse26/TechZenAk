@@ -1,1 +1,5 @@
-
+# Permissions the native modules need beyond android-build/apply-native-patches.mjs PERMISSIONS_ADD.
+# One per line. SCHEDULE_EXACT_ALARM is the USER-GRANTED "alarms & reminders" permission (Settings > Apps > Special access):
+# without it reminders still fire (inexact, delivered in Doze), with it they fire on the minute. USE_EXACT_ALARM stays blocked
+# on purpose: Google Play only allows it for alarm clock and calendar apps.
+android.permission.SCHEDULE_EXACT_ALARM
