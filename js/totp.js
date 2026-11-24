@@ -144,23 +144,23 @@ function canonicalizeBackupCode(text){
 // ---------- QR rendering ----------
 // Renders an otpauth:// URI as a scannable QR into the given <canvas>.
 // The `qrcode` library is loaded lazily (only when 2FA setup is actually
-// opened, not on every app load) and with several CDN fallbacks — one CDN
+// opened, not on every app load) and with a CDN fallback — one CDN
 // being blocked/slow/regionally unreachable no longer means "no QR ever".
 //
-// cdnjs.cloudflare.com is tried FIRST on purpose: it's the only one of the
-// three that sw.js actually caches (see the fetch handler there), so once
-// it has loaded successfully one time, every future 2FA setup — even fully
-// offline — gets the QR instantly from the service-worker cache instead of
-// hitting the network again. jsdelivr/unpkg stay as pure-network fallbacks
-// for the rare case cdnjs itself is unreachable.
+// Version 1.4.4 is used ON PURPOSE: it is the last `qrcode` release whose npm package contains the ready-made browser file
+// build/qrcode.min.js. The 1.5.x packages have no build/ folder, and cdnjs does not host this package at all, so the old
+// addresses (cdnjs .../qrcode/1.5.3/..., jsdelivr and unpkg qrcode@1.5.3/build/...) all answered HTTP 404 and the QR never
+// appeared. jsdelivr is tried first, unpkg is the fallback. sw.js caches both (fetch handler there), so once the library has
+// loaded one time, every future 2FA setup — even fully offline — gets it from the service-worker cache.
 // Standalone Android app (window.QR_STANDALONE is set by the app bundle only): the library is shipped inside the app
 // (scripts/web/bundle-config.json "extraVendor"), so no third-party CDN is ever contacted from the account-security screen.
+// That local path is where scripts/web/vendor-deps.mjs stores the file: vendor/<host>/<path of the url>. If you change the
+// version, change it in bundle-config.json too (tests/web-build.test.js checks that both agree).
 const QR_LIB_CDN_URLS = (typeof window !== 'undefined' && window.QR_STANDALONE) ? [
-  'vendor/cdnjs.cloudflare.com/ajax/libs/qrcode/1.5.3/qrcode.min.js'
+  'vendor/cdn.jsdelivr.net/npm/qrcode@1.4.4/build/qrcode.min.js'
 ] : [
-  'https://cdnjs.cloudflare.com/ajax/libs/qrcode/1.5.3/qrcode.min.js',
-  'https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js',
-  'https://unpkg.com/qrcode@1.5.3/build/qrcode.min.js'
+  'https://cdn.jsdelivr.net/npm/qrcode@1.4.4/build/qrcode.min.js',
+  'https://unpkg.com/qrcode@1.4.4/build/qrcode.min.js'
 ];
 
 let qrLibLoadPromise = null;
