@@ -67,5 +67,5 @@ const FIREBASE_CONFIG = {
 // করা থাকতে হবে (Vercel দিলে ওটা এমনিতেই যোগ করা থাকার কথা)।
 const PASSWORD_RESET_ACTION_CODE_SETTINGS = {
   url: 'https://quranbangla.vercel.app/index.html',
-  handleCodeInApp: true
+  handleCodeInApp: false
 };
