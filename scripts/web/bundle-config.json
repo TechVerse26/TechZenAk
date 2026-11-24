@@ -34,8 +34,8 @@
   ],
   "extraVendor": [
     {
-      "url": "https://cdnjs.cloudflare.com/ajax/libs/qrcode/1.5.3/qrcode.min.js",
-      "why": "QR code of the 2-step-verification setup (js/totp.js loads it lazily; inside the app only this local copy is used)"
+      "url": "https://cdn.jsdelivr.net/npm/qrcode@1.4.4/build/qrcode.min.js",
+      "why": "QR code of the 2-step-verification setup (js/totp.js loads it lazily; inside the app only this local copy is used). Pinned to 1.4.4 on purpose: it is the last qrcode release whose npm package contains the ready-made browser file build/qrcode.min.js (1.5.x publish no build/ folder), and cdnjs does not host this package at all - the old cdnjs URL answered HTTP 404 and stopped every build. If you change the version, js/totp.js must use the same one (tests/web-build.test.js checks that)."
     }
   ],
   "removeFromIndex": [
