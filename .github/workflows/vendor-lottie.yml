@@ -1,1 +1,78 @@
+name: Vendor Lottie runtime
 
+# Puts the official, version-pinned lottie-web runtime into the repository, by itself - nothing to tap:
+#   * it starts automatically when android-build/vendor-lottie.mjs or this file is pushed (that is the push that brings the
+#     Android launch splash into the repository), and
+#   * it can be started by hand any time: Actions > Vendor Lottie runtime > Run workflow.
+# It downloads lottie-web from npm at the version pinned in android-build/vendor-lottie.mjs, copies the SVG player + the license
+# into assets/vendor/lottie/ and commits those files to the branch it ran on (Vercel then deploys them with the site). The
+# Android launch splash (app/js/splash.js) loads that file from the site itself - never from a CDN.
+#
+# After vendoring it also checks the real animation with the real runtime in headless Chromium (tests/ui/splash.real.ui.test.js:
+# plays once at 1x, logo drawn / filled, wordmark revealed, colours and position, offline start) and attaches the rendered frames
+# as the "splash-real-frames" artifact of the run. That check never blocks the vendoring: the files are committed first, and a
+# failing check only marks its own step - open the step log to see what differed.
+#
+# Safe to run again at any time: when the files are already up to date nothing is committed (so there is no loop - the
+# commit only touches assets/vendor/lottie/, which does not start this workflow). It does not build the APK.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'android-build/vendor-lottie.mjs'
+      - '.github/workflows/vendor-lottie.yml'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: vendor-lottie
+  cancel-in-progress: false
+
+jobs:
+  vendor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Download the pinned lottie-web package and copy the SVG player
+        run: node android-build/vendor-lottie.mjs
+
+      - name: Commit the vendored files
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add assets/vendor/lottie
+          if git diff --cached --quiet; then
+            echo "Nothing changed - the lottie-web runtime is already up to date."
+          else
+            git commit -m "Add the lottie-web runtime for the Android launch splash (vendored, version-pinned)"
+            git push
+          fi
+
+      - name: Check the real animation with the real runtime (Chromium)
+        id: real-check
+        continue-on-error: true
+        env:
+          SPLASH_FRAMES_DIR: ${{ runner.temp }}/splash-real-frames
+        run: |
+          mkdir -p "$RUNNER_TEMP/pw" && cd "$RUNNER_TEMP/pw"
+          npm init -y >/dev/null
+          npm install playwright >/dev/null
+          npx playwright install --with-deps chromium
+          cd "$GITHUB_WORKSPACE"
+          PLAYWRIGHT_MODULE="$RUNNER_TEMP/pw/node_modules/playwright" node --test tests/ui/splash.real.ui.test.js
+
+      - name: Keep the rendered frames
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: splash-real-frames
+          path: ${{ runner.temp }}/splash-real-frames
+          if-no-files-found: ignore

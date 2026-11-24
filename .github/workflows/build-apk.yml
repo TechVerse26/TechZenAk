@@ -1,0 +1,499 @@
+name: Build Android app
+
+# Builds the Quran Bangla Android app. The app is STANDALONE: it carries its own copy of the web app (scripts, styles, the
+# app-style UI, fonts, the Firebase SDK and the complete offline Quran) made by scripts/web/build-web.mjs, and it starts and
+# works without the website and without a network. https://quranbangla.vercel.app is only the OPTIONAL backend (AI Tafsir,
+# story moderation) and the host of the App Links. The website is deployed by Vercel and is not touched by this workflow.
+# Everything that is added to the generated Android project lives in android-build/ (see docs/ANDROID_BUILD_BN.md).
+# The app has its OWN copy of the web files: to ship a change of js/, css/, app/ ... inside the app, run this workflow.
+#
+#   * a push that changes this file or android-build/      -> debug APK
+#   * Actions > "Build Android app" > Run workflow          -> debug, release (signed APK + AAB for Google Play) or both
+#
+# Repository secrets (Settings > Secrets and variables > Actions) - all optional for a debug build:
+#   GOOGLE_SERVICES_JSON           Firebase google-services.json of the Android app (push notifications)
+#   ANDROID_KEYSTORE_BASE64        release keystore, base64 encoded          \
+#   ANDROID_KEYSTORE_PASSWORD      keystore password                          |  needed only for
+#   ANDROID_KEY_ALIAS              key alias inside the keystore              |  release builds
+#   ANDROID_KEY_PASSWORD           key password                              /
+#   ANDROID_DEBUG_KEYSTORE_BASE64  optional: your own fixed debug key. NOT needed: android-build/debug.keystore (committed on purpose)
+#                                  is the stable debug key. If this secret exists it OVERRIDES that file - delete it unless you set it on purpose.
+#
+# Where the finished app is: Actions > the run > "Artifacts" (zip) and, easier, the repository's "Releases" page (APK file).
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'What to build'
+        type: choice
+        options: [debug, release, both]
+        default: debug
+      version_name:
+        description: 'Version name shown to users, e.g. 1.2.0 (empty = DEFAULT_VERSION_NAME below)'
+        required: false
+        default: ''
+      version_code:
+        description: 'Version code: a whole number that must grow with every Google Play upload (empty = automatic)'
+        required: false
+        default: ''
+      publish_release:
+        description: 'Attach the APK to a GitHub Release'
+        type: boolean
+        default: true
+      release_notes:
+        description: 'Release notes (optional)'
+        required: false
+        default: ''
+  push:
+    branches: ['**']
+    paths:
+      - '.github/workflows/build-apk.yml'
+      - 'android-build/**'
+      - 'scripts/web/**'
+      - 'tools/quran-data/**'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-android-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  APP_NAME: Quran Bangla
+  APP_ID: com.techverse.quranbangla
+  SITE_URL: https://quranbangla.vercel.app   # optional backend + App Links host. The app does NOT load this site.
+  DEFAULT_VERSION_NAME: '01.02.07'    # shown to users - change it when you publish a new version
+  VERSION_CODE_BASE: '200'         # automatic versionCode = this + run number (always grows, Google Play needs that)
+  QR_PROJECT_DIR: /tmp/app
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 21 }
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('.github/workflows/build-apk.yml', 'android-build/**') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      - name: Settings for this run
+        env:
+          IN_BUILD_TYPE: ${{ inputs.build_type }}
+          IN_VERSION_NAME: ${{ inputs.version_name }}
+          IN_VERSION_CODE: ${{ inputs.version_code }}
+          IN_PUBLISH: ${{ inputs.publish_release }}
+          IN_NOTES: ${{ inputs.release_notes }}
+        run: |
+          BUILD_TYPE="${IN_BUILD_TYPE:-debug}"
+          case "$BUILD_TYPE" in debug | release | both) ;; *) echo "::error::build_type must be debug, release or both"; exit 1 ;; esac
+          VERSION_NAME="${IN_VERSION_NAME:-$DEFAULT_VERSION_NAME}"
+          VERSION_CODE="${IN_VERSION_CODE:-$((VERSION_CODE_BASE + GITHUB_RUN_NUMBER))}"
+          if ! [[ "$VERSION_NAME" =~ ^[0-9A-Za-z][0-9A-Za-z._+-]*$ ]]; then
+            echo "::error::version_name may only contain letters, digits and . _ + - (got: $VERSION_NAME)"; exit 1
+          fi
+          if ! [[ "$VERSION_CODE" =~ ^[1-9][0-9]{0,9}$ ]] || [ "$VERSION_CODE" -gt 2100000000 ]; then
+            echo "::error::version_code must be a whole number between 1 and 2100000000 (got: $VERSION_CODE)"; exit 1
+          fi
+          {
+            echo "BUILD_TYPE=$BUILD_TYPE"
+            echo "APP_VERSION=$VERSION_NAME"
+            echo "APP_VERSION_CODE=$VERSION_CODE"
+            echo "PUBLISH_RELEASE=${IN_PUBLISH:-true}"
+            echo "DO_DEBUG=$([ "$BUILD_TYPE" != release ] && echo true || echo false)"
+            echo "DO_RELEASE=$([ "$BUILD_TYPE" != debug ] && echo true || echo false)"
+            echo "FILE_STEM=${APP_NAME// /}-${VERSION_NAME}-${VERSION_CODE}"
+          } >> "$GITHUB_ENV"
+          printf '%s' "$IN_NOTES" > "$RUNNER_TEMP/release-notes-input.txt"
+          mkdir -p "$GITHUB_WORKSPACE/dist" "$GITHUB_WORKSPACE/reports"
+          echo "Building: $BUILD_TYPE, version $VERSION_NAME ($VERSION_CODE)"
+
+      # The next two checks are ADVISORY for a debug build: a problem they find is shown as a warning, but the APK is still
+      # built (they check the build scripts, not the app's content). Only a signed release build is
+      # stopped by a failed preflight. (Before this change a failing self-test stopped every build.)
+      - name: Check the build scripts (self-test)
+        run: |
+          if ! node android-build/self-test.mjs; then
+            echo "::warning::The self-test of the build scripts reported a problem (details in this step's log). The APK build continues."
+          fi
+
+      - name: Check the repository (preflight)
+        env:
+          QR_BUILD_RELEASE: ${{ env.DO_RELEASE }}
+        run: |
+          if ! node android-build/preflight.mjs; then
+            if [ "$QR_BUILD_RELEASE" = "true" ]; then
+              echo "::error::The preflight check failed - the signed release build is not started. Fix the errors listed above."
+              exit 1
+            fi
+            echo "::warning::The preflight check found problems in the repository (listed above). The debug APK build continues."
+          fi
+
+      # ---- the web bundle: the app's own copy of the web app (this replaces "load the live website") ----------------------------
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+
+      # CDN files and the downloaded Quran editions are kept between runs: faster builds, and a short outage of a CDN or of
+      # api.alquran.cloud cannot stop a build that has already seen the same files.
+      - name: Cache the downloaded web libraries and Quran data
+        uses: actions/cache@v4
+        with:
+          path: |
+            build/vendor-cache
+            build/quran-cache
+          key: web-bundle-inputs-${{ hashFiles('index.html', 'scripts/web/bundle-config.json', 'tools/quran-data/editions.json') }}
+          restore-keys: |
+            web-bundle-inputs-
+
+      - name: Check the web bundle tooling (tests)
+        run: |
+          fail=0
+          node --test tests/web-vendor.test.js tests/web-build.test.js tests/local-data.test.js tests/standalone-net.test.js || fail=1
+          python3 -m unittest discover -s tools/quran-data -p 'test_*.py' || fail=1
+          if [ "$fail" != 0 ]; then
+            if [ "$DO_RELEASE" = true ]; then echo "::error::The tests of the web bundle tooling failed - the signed release build is not started."; exit 1; fi
+            echo "::warning::The tests of the web bundle tooling reported a problem (details above). The debug build continues."
+          fi
+
+      # No bundle, no app: this step is NOT optional. It vendors the CDN files, builds the offline Quran data, audits that the
+      # result can start with no network, and writes bundle-manifest.json (SHA-256 of every file).
+      - name: Build the web bundle (packed into the app)
+        run: |
+          POLICY=warn
+          if [ "$DO_RELEASE" = true ]; then
+            POLICY=enforce
+            for f in scripts/web/vendor.lock.json tools/quran-data/quran-data.lock.json; do
+              if [ ! -f "$f" ]; then
+                echo "::error::$f is missing. Run a debug build first, download the lock files from the build-reports artifact, commit them, then build the release."; exit 1
+              fi
+            done
+          fi
+          node scripts/web/build-web.mjs --out build/www --site-url "$SITE_URL" --app-version "$APP_VERSION" --bundle-id "$APP_VERSION_CODE" \
+            --vendor-cache build/vendor-cache --vendor-lock-policy "$POLICY" \
+            --quran-cache build/quran-cache --quran-lock-policy "$POLICY" | tee "$RUNNER_TEMP/web-bundle.log"
+          { echo "### Web bundle"; tail -n 1 "$RUNNER_TEMP/web-bundle.log"; } >> "$GITHUB_STEP_SUMMARY"
+
+      # The lock files pin the exact bytes of every CDN file and of the Quran data. The first run writes them: download them from
+      # the build-reports artifact and commit them (scripts/web/vendor.lock.json, tools/quran-data/quran-data.lock.json).
+      - name: Keep the web bundle report and the lock files
+        if: always()
+        run: |
+          mkdir -p reports
+          [ -f build/www/bundle-manifest.json ] && cp build/www/bundle-manifest.json reports/web-bundle-manifest.json || true
+          for f in scripts/web/vendor.lock.json tools/quran-data/quran-data.lock.json; do [ -f "$f" ] && cp "$f" reports/ || true; done
+          [ -f "$RUNNER_TEMP/web-bundle.log" ] && cp "$RUNNER_TEMP/web-bundle.log" reports/ || true
+
+      - name: Create the Android project
+        id: create_full
+        continue-on-error: true
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: bash android-build/create-project.sh full
+
+      # ONE fixed debug key for EVERY debug build. Android installs an APK over an installed app only when both were signed with
+      # the SAME key; otherwise the installer shows "App not installed as package conflicts with an existing package".
+      # A CI runner makes a brand-new random key on every run, so without a fixed key no build can ever update the previous one.
+      # Order: 1) secret ANDROID_DEBUG_KEYSTORE_BASE64 (your own key)  2) android-build/debug.keystore (committed on purpose -
+      # a debug key is public by design, never use it for a release)  3) none -> warning, random key (uninstall before installing).
+      - name: Stable debug signing key
+        env:
+          DEBUG_KEYSTORE_B64: ${{ secrets.ANDROID_DEBUG_KEYSTORE_BASE64 }}
+        run: |
+          mkdir -p ~/.android
+          rm -f ~/.android/debug.keystore
+          key_source=""
+          if [ -n "$DEBUG_KEYSTORE_B64" ]; then
+            printf '%s' "$DEBUG_KEYSTORE_B64" | base64 -d > ~/.android/debug.keystore 2> /dev/null || true
+            if keytool -list -keystore ~/.android/debug.keystore -storepass android -alias androiddebugkey > /dev/null 2>&1; then
+              key_source="secret ANDROID_DEBUG_KEYSTORE_BASE64"
+            else
+              rm -f ~/.android/debug.keystore
+              echo "::warning::The secret ANDROID_DEBUG_KEYSTORE_BASE64 is not a usable debug keystore (store password must be android, alias androiddebugkey), so it is ignored. Delete the secret or replace it."
+            fi
+          fi
+          if [ -z "$key_source" ] && [ -f android-build/debug.keystore ]; then
+            if keytool -list -keystore android-build/debug.keystore -storepass android -alias androiddebugkey > /dev/null 2>&1; then
+              cp android-build/debug.keystore ~/.android/debug.keystore
+              key_source="android-build/debug.keystore (repository)"
+            else
+              echo "::warning::android-build/debug.keystore cannot be opened with store password android / alias androiddebugkey."
+            fi
+          fi
+          if [ -z "$key_source" ]; then
+            printf '%s\n' "DEBUG_KEY_SOURCE=" "DEBUG_KEY_SHA256=" >> "$GITHUB_ENV"
+            echo "::warning::No usable fixed debug key (android-build/debug.keystore is missing or unreadable and there is no valid ANDROID_DEBUG_KEYSTORE_BASE64 secret). A random key is used for this run, so this APK will NOT install over an older one. Restore android-build/debug.keystore in the repository."
+          else
+            key_fp="$(keytool -list -v -keystore ~/.android/debug.keystore -storepass android -alias androiddebugkey 2> /dev/null | awk '/SHA256:/ && !done { print $2; done = 1 }' || true)"
+            printf '%s\n' "DEBUG_KEY_SOURCE=$key_source" "DEBUG_KEY_SHA256=$key_fp" >> "$GITHUB_ENV"
+            echo "Debug signing key from: $key_source"
+            echo "Debug signing key SHA-256: $key_fp"
+            echo "Every debug APK is signed with this same key, so a new debug APK installs over the older one."
+          fi
+
+      - name: Build debug APK
+        id: debug_full
+        if: env.DO_DEBUG == 'true' && steps.create_full.outcome == 'success'
+        continue-on-error: true
+        working-directory: /tmp/app/android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --stacktrace 2>&1 | tee "$RUNNER_TEMP/gradle-debug-full.log"
+          cp app/build/outputs/apk/debug/app-debug.apk "$GITHUB_WORKSPACE/dist/${FILE_STEM}-debug.apk"
+
+      - name: Build signed release APK and AAB
+        id: release
+        if: env.DO_RELEASE == 'true' && steps.create_full.outcome == 'success' && steps.debug_full.outcome != 'failure'
+        working-directory: /tmp/app/android
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          missing=""
+          for v in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+            [ -n "${!v:-}" ] || missing="$missing $v"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::A release build needs these repository secrets:$missing (Settings > Secrets and variables > Actions). How to create them: docs/ANDROID_BUILD_BN.md"
+            exit 1
+          fi
+          KS="$RUNNER_TEMP/qr-release.keystore"
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$KS"
+          chmod 600 "$KS"
+          export QR_KEYSTORE_PATH="$KS" QR_KEYSTORE_PASSWORD="$ANDROID_KEYSTORE_PASSWORD" QR_KEY_ALIAS="$ANDROID_KEY_ALIAS" QR_KEY_PASSWORD="$ANDROID_KEY_PASSWORD"
+          if ! keytool -list -keystore "$KS" -storepass:env QR_KEYSTORE_PASSWORD -alias "$QR_KEY_ALIAS" > /dev/null 2>&1; then
+            echo "::error::The keystore could not be opened with this password / key alias. Check the secrets ANDROID_KEYSTORE_PASSWORD and ANDROID_KEY_ALIAS."
+            exit 1
+          fi
+          chmod +x gradlew
+          ./gradlew assembleRelease bundleRelease --stacktrace 2>&1 | tee "$RUNNER_TEMP/gradle-release.log"
+          cp app/build/outputs/apk/release/app-release.apk "$GITHUB_WORKSPACE/dist/${FILE_STEM}-release.apk"
+          cp app/build/outputs/bundle/release/app-release.aab "$GITHUB_WORKSPACE/dist/${FILE_STEM}-release.aab"
+
+      - name: Build debug APK in safe mode (fallback)
+        id: debug_safe
+        if: env.DO_DEBUG == 'true' && (steps.create_full.outcome == 'failure' || steps.debug_full.outcome == 'failure')
+        env:
+          GOOGLE_SERVICES_JSON: ''
+        run: |
+          echo "::warning::The normal debug build failed. A reduced safe-mode APK is built so that something installable exists - this run is still reported as failed."
+          bash android-build/create-project.sh safe
+          cd /tmp/app/android
+          chmod +x gradlew
+          ./gradlew assembleDebug --stacktrace 2>&1 | tee "$RUNNER_TEMP/gradle-debug-safe.log"
+          cp app/build/outputs/apk/debug/app-debug.apk "$GITHUB_WORKSPACE/dist/${FILE_STEM}-debug-SAFE-MODE.apk"
+
+      # The audit is a report. For a DEBUG apk it can never stop the publishing below; for a signed RELEASE apk a policy
+      # error (for example "signed with the debug key") still blocks the GitHub Release, as before.
+      - name: Check what is inside the APKs
+        id: audit
+        continue-on-error: true
+        run: |
+          shopt -s nullglob
+          files=(dist/*.apk)
+          if [ ${#files[@]} -eq 0 ]; then echo "No APK was built."; exit 0; fi
+          (cd dist && sha256sum *.apk *.aab 2>/dev/null > SHA256SUMS.txt) || true
+          release_failed=0
+          for apk in "${files[@]}"; do
+            kind=debug; strict=()
+            case "$apk" in *-release.apk) kind=release; strict=(--strict) ;; esac
+            mode=full; case "$apk" in *SAFE-MODE*) mode=safe ;; esac
+            if ! node android-build/audit-apk.mjs --apk "$apk" --app-id "$APP_ID" --version-name "$APP_VERSION" --version-code "$APP_VERSION_CODE" \
+              --kind "$kind" --mode "$mode" "${strict[@]}" \
+              --summary "reports/audit-$(basename "$apk").md" --json "reports/audit-$(basename "$apk").json" --assetlinks "reports/assetlinks-$kind.json" \
+              | tee -a "$GITHUB_STEP_SUMMARY"; then
+              if [ "$kind" = release ]; then release_failed=1
+              else echo "::warning::The audit of $(basename "$apk") did not finish (advisory only - the APK is still published)."; fi
+            fi
+          done
+          [ "$release_failed" = 0 ] || { echo "::error::The audit of the release APK found a problem (see above) - it is not published to Releases."; exit 1; }
+
+      # Reads the signing certificate of the finished debug APK and compares it with the stable debug key chosen above.
+      # It only reports (a debug APK is still published), but the result is written on the Release page, so you can see at a
+      # glance whether this APK installs over the previous one (same fingerprint) or needs the old app uninstalled first.
+      - name: Check the debug APK is signed with the stable key
+        id: keycheck
+        if: always() && env.DO_DEBUG == 'true' && hashFiles('dist/*-debug*.apk') != ''
+        continue-on-error: true
+        run: |
+          shopt -s nullglob
+          apks=(dist/*-debug*.apk)
+          apk="${apks[0]}"
+          json="reports/audit-$(basename "$apk").json"
+          actual=""
+          if [ -f "$json" ]; then
+            actual="$(node -e 'try { const j = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); process.stdout.write((j.signer && j.signer.sha256) || ""); } catch (e) {}' "$json")"
+          fi
+          expected="${DEBUG_KEY_SHA256:-}"
+          if [ -z "$actual" ]; then status=unknown
+          elif [ -z "$expected" ]; then status=random
+          elif [ "$actual" = "$expected" ]; then status=ok
+          else status=mismatch
+          fi
+          printf '%s\n' "KEY_STATUS=$status" "KEY_SHA256=$actual" >> "$GITHUB_ENV"
+          {
+            echo '### Signing key of the debug APK'
+            echo
+            echo '| | |'
+            echo '|---|---|'
+            echo "| APK signed with (SHA-256) | \`${actual:-unknown}\` |"
+            echo "| Stable debug key (SHA-256) | \`${expected:-none}\` |"
+            echo "| Key source | ${DEBUG_KEY_SOURCE:-none} |"
+            echo "| Result | $status |"
+            echo
+            echo 'Every debug APK of this repository must show the SAME fingerprint: then each new APK installs over the previous one.'
+            echo 'A different fingerprint than the previous build makes Android say "package conflicts with an existing package" - uninstall the old app once.'
+          } >> "$GITHUB_STEP_SUMMARY"
+          case "$status" in
+            ok) echo "The APK is signed with the stable debug key $actual" ;;
+            mismatch) echo "::error::The APK is NOT signed with the stable debug key (APK: $actual, expected: $expected). It will not install over a build signed with the stable key." ;;
+            random) echo "::warning::The APK is signed with a temporary key ($actual): it will not install over an older build." ;;
+            *) echo "::warning::The signing certificate of the APK could not be read, so the stable-key check was skipped." ;;
+          esac
+
+      - name: Next steps for App Links (release only)
+        if: hashFiles('reports/assetlinks-release.json') != ''
+        run: |
+          {
+            echo '### Verified App Links (optional)'
+            echo
+            echo 'To let links to the website open in the app, publish this file at `https://quranbangla.vercel.app/.well-known/assetlinks.json`'
+            echo '(commit it as `.well-known/assetlinks.json`). If the app is installed from Google Play with Play App Signing, add the SHA-256 fingerprint shown in'
+            echo 'Play Console > Setup > App signing as a second entry in `sha256_cert_fingerprints`.'
+            echo
+            echo '```json'
+            cat reports/assetlinks-release.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload debug APK
+        if: always() && hashFiles('dist/*-debug*.apk') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: QuranBangla-debug-apk
+          path: dist/*-debug*.apk
+          if-no-files-found: ignore
+
+      - name: Upload release APK and AAB
+        if: always() && (hashFiles('dist/*-release.apk') != '' || hashFiles('dist/*.aab') != '')
+        uses: actions/upload-artifact@v4
+        with:
+          name: QuranBangla-release
+          path: |
+            dist/*-release.apk
+            dist/*.aab
+            dist/SHA256SUMS.txt
+          if-no-files-found: ignore
+
+      - name: Upload build reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-reports
+          path: |
+            reports/
+            /tmp/app/qr-patch-report.*.json
+            /tmp/app/android/app/schemas/
+            ${{ runner.temp }}/gradle-*.log
+          if-no-files-found: ignore
+
+      - name: Publish the debug APK to Releases
+        if: env.PUBLISH_RELEASE == 'true' && hashFiles('dist/*-debug*.apk') != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          shopt -s nullglob
+          apk=(dist/*-debug*.apk)
+          tag="build-${GITHUB_RUN_NUMBER}"
+          title="$APP_NAME #${GITHUB_RUN_NUMBER} (debug $APP_VERSION)"
+          note="Debug APK for testing - not for Google Play. Version $APP_VERSION ($APP_VERSION_CODE), commit ${GITHUB_SHA::7}."
+          case "${apk[0]}" in *SAFE-MODE*) title="$title SAFE MODE"; note="SAFE MODE: reduced build produced because the full build failed. $note" ;; esac
+          hint="Install: download the .apk file below on your phone and open it (Android may ask you to allow installing from this source). / ইনস্টল: নিচের .apk ফাইলটি ফোনে ডাউনলোড করে খুলুন (Android চাইলে এই উৎস থেকে ইনস্টলের অনুমতি দিন)।"
+          case "${KEY_STATUS:-unknown}" in
+            ok) keyline="Signing key (SHA-256): ${KEY_SHA256}. Builds signed with this same key install over each other without uninstalling (builds made before this key was fixed used other keys: uninstall those once). / সাইনিং কী: একই কী-র বিল্ডগুলো একটার ওপর আরেকটা আনইনস্টল ছাড়াই ইনস্টল হয় (এই কী ঠিক হওয়ার আগের বিল্ডের কী আলাদা ছিল — সেগুলো একবার আনইনস্টল করুন)।" ;;
+            mismatch) keyline="WARNING: this APK is NOT signed with the stable debug key (APK key: ${KEY_SHA256}). Uninstall the old Quran Bangla app before installing it. / সতর্কতা: এই APK স্থায়ী debug কী দিয়ে সাইন হয়নি — আগে পুরোনো অ্যাপ আনইনস্টল করুন।" ;;
+            random) keyline="WARNING: this APK is signed with a temporary key (${KEY_SHA256}), because android-build/debug.keystore could not be used. Uninstall the old app first. / সতর্কতা: স্থায়ী debug কী ব্যবহার হয়নি — আগে পুরোনো অ্যাপ আনইনস্টল করুন।" ;;
+            *) keyline="Signing key: could not be read in this run. / সাইনিং কী এই রানে পড়া যায়নি।" ;;
+          esac
+          conflict="If Android says 'App not installed as package conflicts with an existing package': uninstall the old Quran Bangla app (also from Dual apps / Second space / work profile), then install again. This is needed only when the signing key above differs from the previous build. / 'App not installed as package conflicts with an existing package' এলে: পুরোনো Quran Bangla অ্যাপ আনইনস্টল করুন (Dual apps / Second space থেকেও), তারপর আবার ইনস্টল করুন। আগের বিল্ডের সাইনিং কী থেকে ওপরের কী আলাদা হলেই শুধু এটা লাগে।"
+          { cat "$RUNNER_TEMP/release-notes-input.txt"; echo; echo "$note"; echo; echo "$hint"; echo; echo "$keyline"; echo; echo "$conflict"; } > "$RUNNER_TEMP/release-notes.md"
+          assets=("${apk[0]}")
+          if [ -f dist/SHA256SUMS.txt ]; then assets+=(dist/SHA256SUMS.txt); fi
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release upload "$tag" "${assets[@]}" --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$tag" "${assets[@]}" \
+              --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "$title" --notes-file "$RUNNER_TEMP/release-notes.md" --prerelease
+          fi || {
+            echo "::error::The GitHub Release could not be created. Check Settings > Actions > General > Workflow permissions (Read and write permissions). The APK is still in this run's Artifacts."
+            exit 1
+          }
+          {
+            echo '### Download the APK'
+            echo
+            echo "Releases page: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/${tag}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish the signed release APK to Releases
+        if: env.PUBLISH_RELEASE == 'true' && hashFiles('dist/*-release.apk') != '' && steps.audit.outcome != 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          shopt -s nullglob
+          apk=(dist/*-release.apk)
+          tag="v${APP_VERSION}-${APP_VERSION_CODE}"
+          note="Signed release build. Version $APP_VERSION ($APP_VERSION_CODE), commit ${GITHUB_SHA::7}. The .aab for Google Play is in the workflow artifacts (QuranBangla-release)."
+          { cat "$RUNNER_TEMP/release-notes-input.txt"; echo; echo "$note"; } > "$RUNNER_TEMP/release-notes.md"
+          assets=("${apk[0]}")
+          if [ -f dist/SHA256SUMS.txt ]; then assets+=(dist/SHA256SUMS.txt); fi
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release upload "$tag" "${assets[@]}" --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$tag" "${assets[@]}" \
+              --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "$APP_NAME $APP_VERSION" --notes-file "$RUNNER_TEMP/release-notes.md"
+          fi || {
+            echo "::error::The GitHub Release could not be created. Check Settings > Actions > General > Workflow permissions (Read and write permissions). The files are still in this run's Artifacts."
+            exit 1
+          }
+          {
+            echo '### Download the signed APK'
+            echo
+            echo "Releases page: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/${tag}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove the signing keys from the runner
+        if: always()
+        run: rm -f "$RUNNER_TEMP/qr-release.keystore" "$HOME/.android/debug.keystore" || true
+
+      - name: Mark the run as failed when the full build failed
+        if: always() && (steps.create_full.outcome == 'failure' || steps.debug_full.outcome == 'failure')
+        run: |
+          {
+            echo '### The full build failed'
+            echo
+            echo 'See the red step above. A reduced "SAFE-MODE" debug APK was built as a fallback where possible (artifact `QuranBangla-debug-apk`).'
+            echo
+            echo 'Last lines of the Gradle log:'
+            echo '```'
+            tail -n 60 "$RUNNER_TEMP/gradle-debug-full.log" 2>/dev/null || echo '(no Gradle log: the failure happened while creating the project)'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::error::The full build failed. Details are in the step summary and in the 'build-reports' artifact."
+          exit 1
