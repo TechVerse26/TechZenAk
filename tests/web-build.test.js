@@ -74,10 +74,31 @@ test('what must be in the bundle is in it, and what must not be is not', async (
   for (const f of ['index.html', 'app-config.js', 'privacy.html', 'terms.html', 'account-deletion.html', 'js/platform.js', 'js/local-data.js', 'js/prayer-calc.js', 'js/standalone-net.js', 'js/quran-native.js', 'js/native-sync.js', 'app/js/tasbih.js',
     'app/js/boot.js', 'app/css/tokens.css', 'assets/animations/quran-bangla-splash.json', 'assets/vendor/lottie/lottie_svg.min.js', 'icons/icon-192.png', 'css/legal.css', 'js/legal.js',
     'data/quran/manifest.json', 'data/quran/structure.json', 'data/quran/text/bn.bengali.json', 'bundle-manifest.json',
-    'vendor/cdnjs.cloudflare.com/ajax/libs/qrcode/1.5.3/qrcode.min.js']) assert.ok(has(f), f + ' is missing');
+    'vendor/cdn.jsdelivr.net/npm/qrcode@1.4.4/build/qrcode.min.js']) assert.ok(has(f), f + ' is missing');
   for (const f of ['sw.js', 'manifest.json', '404.html', 'api', 'tests', 'scripts', 'docs', 'android-build', '.github', 'firestore.rules', 'package.json', 'README.md', 'icons/banner-donate.webp', 'icons/donation-banner-with-text.png']) {
     assert.ok(!has(f), f + ' must not be shipped in the app');
   }
+});
+
+test('QR library: js/totp.js asks for exactly the file the bundle vendors, on a version that really exists on npm', async () => {
+  // The fake CDN above answers every *.js address, so it can never notice a dead real address (that is how the cdnjs 404 got
+  // through). What can be checked offline: the app-side path in js/totp.js must be where vendor-deps.mjs stores the address from
+  // bundle-config.json, and the website fallbacks must name the same version.
+  const cfg = JSON.parse(fs.readFileSync(path.join(ROOT, 'scripts/web/bundle-config.json'), 'utf8'));
+  const qr = (cfg.extraVendor || []).map((x) => x.url).filter((u) => /qrcode/i.test(u));
+  assert.equal(qr.length, 1, 'bundle-config.json lists exactly one QR library');
+  const { localPathFor } = await import('../scripts/web/vendor-deps.mjs');
+  const src = fs.readFileSync(path.join(ROOT, 'js/totp.js'), 'utf8');
+  const list = /QR_LIB_CDN_URLS\s*=\s*\([^)]*\)\s*\?\s*\[([\s\S]*?)\]\s*:\s*\[([\s\S]*?)\]\s*;/.exec(src);
+  assert.ok(list, 'QR_LIB_CDN_URLS was found in js/totp.js');
+  const urls = (s) => [...s.matchAll(/'([^']+)'/g)].map((m) => m[1]);
+  assert.deepEqual(urls(list[1]), [localPathFor(qr[0])], 'the app must load the QR library from the path the bundle build creates');
+  const version = (u) => (/qrcode@(\d+\.\d+\.\d+)\//.exec(u) || [])[1];
+  const want = version(qr[0]);
+  assert.ok(want, 'the QR library address in bundle-config.json names an exact version');
+  for (const u of urls(list[2])) assert.equal(version(u), want, u + ' must use the same version as bundle-config.json');
+  // qrcode 1.5.x publishes no build/ folder on npm, so every .../qrcode@1.5.x/build/... address is HTTP 404 on jsdelivr and unpkg.
+  for (const u of [qr[0], ...urls(list[2])]) assert.doesNotMatch(u, /qrcode@1\.5\.\d+\//, u + ': qrcode 1.5.x has no browser file on npm (HTTP 404) - use 1.4.4');
 });
 
 test('bundle-manifest.json lists every file with its real size and SHA-256', async () => {
