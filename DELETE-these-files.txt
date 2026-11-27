@@ -1,0 +1,11 @@
+এই ফাইল/ফোল্ডারগুলো রিপোজিটরি থেকে মুছে ফেলুন (আর দরকার নেই):
+
+.github/workflows/vendor-lottie.yml
+android-build/vendor-lottie.mjs
+assets/animations/quran-bangla-splash.json
+assets/vendor/lottie/LICENSE.md
+assets/vendor/lottie/VERSION.json
+assets/vendor/lottie/lottie_svg.min.js
+docs/LOTTIE_SPLASH_BN.md
+tests/helpers/lottie-runtime-stub.js
+tests/ui/splash.real.ui.test.js
