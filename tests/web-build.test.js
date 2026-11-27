@@ -72,7 +72,7 @@ test('what must be in the bundle is in it, and what must not be is not', async (
   const { out } = await build();
   const has = (f) => fs.existsSync(path.join(out, f));
   for (const f of ['index.html', 'app-config.js', 'privacy.html', 'terms.html', 'account-deletion.html', 'js/platform.js', 'js/local-data.js', 'js/prayer-calc.js', 'js/standalone-net.js', 'js/quran-native.js', 'js/native-sync.js', 'app/js/tasbih.js',
-    'app/js/boot.js', 'app/css/tokens.css', 'assets/animations/quran-bangla-splash.json', 'assets/vendor/lottie/lottie_svg.min.js', 'icons/icon-192.png', 'css/legal.css', 'js/legal.js',
+    'app/js/boot.js', 'app/js/splash.js', 'app/js/widgets.js', 'app/css/tokens.css', 'icons/icon-192.png', 'css/legal.css', 'js/legal.js',
     'data/quran/manifest.json', 'data/quran/structure.json', 'data/quran/text/bn.bengali.json', 'bundle-manifest.json',
     'vendor/cdn.jsdelivr.net/npm/qrcode@1.4.4/build/qrcode.min.js']) assert.ok(has(f), f + ' is missing');
   for (const f of ['sw.js', 'manifest.json', '404.html', 'api', 'tests', 'scripts', 'docs', 'android-build', '.github', 'firestore.rules', 'package.json', 'README.md', 'icons/banner-donate.webp', 'icons/donation-banner-with-text.png']) {

@@ -184,8 +184,8 @@
 
   // ---------- system bars (status bar / navigation bar) ----------
   N.setSystemBars = function(scheme){
-    // While the (white) launch splash is on screen the bars stay white too; app/js/splash.js applies the wanted scheme itself
-    // right after it has left.
+    // While the launch splash is on screen the bars keep the splash colour too; app/js/splash.js applies the wanted scheme
+    // itself right after it has left.
     var hold = P.splash;
     if(hold && hold.barsHeld){ hold.pendingScheme = scheme; return; }
     var bg = scheme === 'dark' ? '#0B1513' : '#F6F4EE';

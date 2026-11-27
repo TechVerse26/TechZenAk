@@ -134,7 +134,7 @@ test('it is wired into the app: screen registered, Discover tile, deep link, scr
   assert.equal(registered.tasbih.topbar().lead, 'back');
   QRApp.tasbih.open(); assert.equal(registered.pushed, 'tasbih');
   const read = (f) => fs.readFileSync(path.join(ROOT, f), 'utf8');
-  assert.match(read('js/platform.js'), /'app\/js\/tasbih\.js',\s*\n\s*'app\/js\/reminders\.js',\s*\n\s*'app\/js\/compat\.js'/, 'loaded by the app layer, before compat.js');
+  assert.match(read('js/platform.js'), /'app\/js\/tasbih\.js',\s*\n\s*'app\/js\/reminders\.js',\s*\n\s*'app\/js\/widgets\.js',\s*\n\s*'app\/js\/compat\.js'/, 'loaded by the app layer, before compat.js');
   assert.match(read('app/js/discover.js'), /\{ id: 'tasbih', group: 'daily', icon: 'repeat'/);
   assert.match(read('app/js/notifications.js'), /tasbih: function\(\)\{ QRApp\.features\.open\('tasbih'\); \}/);
   assert.match(read('app/css/screens.css'), /\.qa-tasbih-ring\{/);

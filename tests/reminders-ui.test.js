@@ -82,7 +82,7 @@ test('wired into the app: screen registered, script list, Discover tile that exi
   QRApp.reminders.open(); assert.equal(registered.pushed, 'reminders');
   assert.equal(QRApp.reminders.available(), true);
   assert.equal(load({ available: false }).QRApp.reminders.available(), false, 'false on the website / the safe build');
-  assert.match(read('js/platform.js'), /'app\/js\/tasbih\.js',\s*\n\s*'app\/js\/reminders\.js',\s*\n\s*'app\/js\/compat\.js'/);
+  assert.match(read('js/platform.js'), /'app\/js\/tasbih\.js',\s*\n\s*'app\/js\/reminders\.js',\s*\n\s*'app\/js\/widgets\.js',\s*\n\s*'app\/js\/compat\.js'/);
   const disc = read('app/js/discover.js');
   assert.match(disc, /\{ id: 'reminders', group: 'daily', icon: 'bell'.*visible: function\(\)\{ return !!\(QRApp\.reminders && QRApp\.reminders\.available\(\)\); \}/);
   assert.match(disc, /list: function\(\)\{ return FEATURES\.filter\(function\(f\)\{ return !f\.visible \|\| f\.visible\(\); \}\); \}/);
@@ -113,4 +113,71 @@ test('every UI helper and icon the two new screens use exists in the app layer (
     const icon = new RegExp(`id: '${id}'[^}]*icon: '(\\w+)'`).exec(disc)[1];
     assert.ok(icons.has(icon), `the Discover tile of ${id} uses the icon "${icon}"`);
   }
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// permissions: the notification permission is REQUESTED (system dialog); the settings page is only the second step
+// ---------------------------------------------------------------------------------------------------------------------------------
+function loadPermissions({ requestResult, openResult = true, confirmAnswer = true } = {}) {
+  const seen = { requested: 0, settings: [], confirms: [], snacks: [] };
+  const QRApp = {
+    isBn: () => false, T: (bn, en) => en, N: (n) => String(n), h: () => ({}),
+    ui: { confirm: (o) => { seen.confirms.push(o); return Promise.resolve(confirmAnswer); }, snack: (t) => { seen.snacks.push(t); } },
+    nav: { register() {}, push() {} }
+  };
+  const bridge = {
+    isAvailable: () => true,
+    requestNotifications: () => { seen.requested++; return Promise.resolve(requestResult); },
+    openSettings: (screen) => { seen.settings.push(screen); return Promise.resolve(openResult); }
+  };
+  const win = { QRApp, QR_NATIVE: bridge, QR_NATIVE_API: API };
+  vm.runInNewContext(read('app/js/reminders.js'), { window: win, document: { addEventListener() {}, removeEventListener() {} }, Object, Array, Math, Number, String, Promise, JSON, Date });
+  return { core: QRApp.reminders.core, seen };
+}
+
+test('notification permission: the system dialog is asked first; when it is granted nothing else is shown', async () => {
+  const p = loadPermissions({ requestResult: { granted: true, state: 'granted' } });
+  assert.equal(await p.core.askNotifications(), true);
+  assert.equal(p.seen.requested, 1);
+  assert.deepEqual(p.seen.confirms, []); assert.deepEqual(p.seen.settings, []);
+});
+
+test('notification permission: when the dialog cannot help (denied twice / switched off) the person is told so and the right settings page opens', async () => {
+  for (const answer of [{ granted: false, state: 'denied' }, null]) {
+    const p = loadPermissions({ requestResult: answer, confirmAnswer: true });
+    assert.equal(await p.core.askNotifications(), false);
+    assert.equal(p.seen.requested, 1, 'the dialog was tried first');
+    assert.equal(p.seen.confirms.length, 1, 'with an explanation ...');
+    assert.match(p.seen.confirms[0].text, /Open the phone settings/);
+    assert.deepEqual(p.seen.settings, ['notifications'], '... and the notification settings of this app');
+  }
+  const no = loadPermissions({ requestResult: { granted: false }, confirmAnswer: false });
+  assert.equal(await no.core.askNotifications(), false);
+  assert.deepEqual(no.seen.settings, [], 'the person said no: nothing is opened');
+});
+
+test('precise alarms: the system page of the app opens; when this phone has none the person is told where to find it', async () => {
+  const ok = loadPermissions({ openResult: true });
+  assert.equal(await ok.core.askExactAlarms(), true);
+  assert.deepEqual(ok.seen.settings, ['exact-alarms']); assert.deepEqual(ok.seen.snacks, []);
+  const bad = loadPermissions({ openResult: false });
+  assert.equal(await bad.core.askExactAlarms(), false);
+  assert.equal(bad.seen.snacks.length, 1); assert.match(bad.seen.snacks[0], /Alarms & reminders/);
+});
+
+test('a permission given in the system settings is noticed when the app comes back, so the alarms are planned again at once', () => {
+  const { core } = load();
+  assert.equal(core.permissionGained({ exactAlarms: false, notificationsEnabled: true }, { exactAlarms: true, notificationsEnabled: true }), true);
+  assert.equal(core.permissionGained({ exactAlarms: true, notificationsEnabled: false }, { exactAlarms: true, notificationsEnabled: true }), true);
+  assert.equal(core.permissionGained({ exactAlarms: true, notificationsEnabled: true }, { exactAlarms: true, notificationsEnabled: true }), false);
+  assert.equal(core.permissionGained({ exactAlarms: true, notificationsEnabled: true }, { exactAlarms: false, notificationsEnabled: true }), false, 'taking a permission away is not "gained"');
+  assert.equal(core.permissionGained(null, { exactAlarms: true }), false, 'the first look is not a change');
+  assert.equal(core.permissionGained({ exactAlarms: false }, null), false);
+});
+
+test('the reminders screen offers real buttons for the permissions (not only a link to the settings)', () => {
+  const src = read('app/js/reminders.js');
+  assert.match(src, /T\('নোটিফিকেশনের অনুমতি দিন', 'Allow notifications'\)[^\n]*askNotifications\(\)/);
+  assert.match(src, /T\('নির্ভুল অ্যালার্মের অনুমতি দিন', 'Allow precise alarms'\)[^\n]*askExactAlarms\(\)/);
+  assert.match(src, /if\(v && S\.caps && S\.caps\.notificationsEnabled === false\) askNotifications\(\)/, 'switching a reminder on asks for the notification permission');
 });

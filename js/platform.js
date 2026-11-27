@@ -29,9 +29,9 @@
 // page is reloaded once into the plain website UI for the rest of that app
 // session, so a broken app layer can never leave the user with a blank screen.
 //
-// Launch splash: in the app only (see step 1c below and app/js/splash.js) the original Lottie
-// animation is played on a white overlay while the app UI starts behind it. The website never
-// loads, references or creates any of it.
+// Launch splash: in the app only (see step 1c below and app/js/splash.js) a modern splash animation,
+// drawn entirely in code (inline SVG + CSS, no animation JSON, no library), is played on an overlay
+// while the app UI starts behind it. The website never loads, references or creates any of it.
 (function(){
   'use strict';
   if(window.QR_PLATFORM) return;
@@ -67,6 +67,7 @@
     'app/js/notifications.js',
     'app/js/tasbih.js',
     'app/js/reminders.js',
+    'app/js/widgets.js',
     'app/js/compat.js',
     'app/js/boot.js'
   ];
@@ -171,8 +172,8 @@
     P.ready = true;
     root.classList.add('qa-ready');
     clearTimeout(watchdog);
-    // let the first app frame paint, then release the native splash screen - unless the Lottie launch splash (step 1c) is
-    // still holding it: that one releases the native splash itself as soon as its first frame is on screen
+    // let the first app frame paint, then release the native splash screen - unless the launch splash (step 1c) is still
+    // holding it: that one releases the native splash itself as soon as its first frame is on screen
     requestAnimationFrame(function(){ setTimeout(function(){ if(!(P.splash && P.splash.holdsNative)) hideSplash(); }, 60); });
     readyResolvers.splice(0).forEach(function(r){ r(P); });
     try{ w.dispatchEvent(new CustomEvent('qr:app-ready')); }catch(e){}
@@ -216,20 +217,18 @@
     }
   }catch(e){ P.launch = P.launch || { shortcut: '', search: '' }; }
 
-  // 1c) Lottie launch splash (Android app only). app/js/splash.js is injected right here - and deliberately NOT listed in
-  //     APP_SCRIPTS, which only run after DOMContentLoaded - so the animation starts as early as the page allows. It draws a
-  //     white overlay with the original animation (assets/animations/quran-bangla-splash.json, rendered by the bundled
-  //     lottie-web runtime), releases the native splash screen once the first frame is on screen, and removes itself when the
-  //     animation has finished AND the app UI is ready (markReady below). Until it has released the native splash,
+  // 1c) Launch splash (Android app only). app/js/splash.js is injected right here - and deliberately NOT listed in APP_SCRIPTS,
+  //     which only run after DOMContentLoaded - so the animation starts as early as the page allows. It is drawn entirely in
+  //     code (inline SVG + CSS animation): there is no animation JSON, no animation library and no second file, so there is
+  //     nothing that can arrive late. It builds a full-screen overlay in the colour of the native splash screen, releases the
+  //     native splash once its first frame is on screen (no flicker: both show the same colour), and removes itself when the
+  //     animation has played AND the app UI is ready (markReady below). Until it has released the native splash,
   //     P.splash.holdsNative stops markReady() from doing so.
   //     This file keeps the safety net: if splash.js cannot be loaded (or does not start in time) the hold is dropped and the
   //     app starts exactly as before; whatever happens, the overlay is force-removed after SPLASH_LAST_RESORT_MS.
-  //     The files are listed here only, so the website never references them.
+  //     The file is listed here only, so the website never references it.
   var SPLASH_FILES = {
-    script: 'app/js/splash.js',
-    runtime: 'assets/vendor/lottie/lottie_svg.min.js',        // lottie-web, SVG renderer, version-pinned (assets/vendor/lottie/VERSION.json)
-    data: 'assets/animations/quran-bangla-splash.json',        // the original animation, unmodified
-    fallback: 'icons/icon-512.png'                             // static brand splash when the animation cannot be played
+    script: 'app/js/splash.js'                                  // the whole splash: controller, artwork and animation
   };
   var SPLASH_START_TIMEOUT_MS = 5000;
   var SPLASH_LAST_RESORT_MS = 16000;
@@ -250,14 +249,6 @@
       splash.holdsNative = false;
       hideSplash();
     }
-    // the runtime and the animation download while splash.js itself is still on its way
-    [{ rel: 'preload', as: 'script', href: SPLASH_FILES.runtime },
-     { rel: 'preload', as: 'fetch', href: SPLASH_FILES.data, crossorigin: 'anonymous' }].forEach(function(attrs){
-      var l = d.createElement('link');
-      for(var k in attrs) l.setAttribute(k, attrs[k]);
-      l.setAttribute('data-qa-asset', '1');
-      host.appendChild(l);
-    });
     var s = d.createElement('script');
     s.src = SPLASH_FILES.script;
     s.async = true;

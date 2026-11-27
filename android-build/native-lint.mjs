@@ -30,7 +30,7 @@ const TOKEN = '__APP_ID__';
 // libraries the overlay may import; for the small, closed ones the exact class names are listed so a typo is caught
 const EXTERNAL_PREFIXES = ['android.', 'androidx.', 'com.getcapacitor.', 'org.json.', 'java.', 'javax.', 'kotlin.'];
 const EXTERNAL_EXACT = {
-  'com.getcapacitor.': ['JSArray', 'JSObject', 'Plugin', 'PluginCall', 'PluginMethod', 'BridgeActivity', 'annotation.CapacitorPlugin'],
+  'com.getcapacitor.': ['JSArray', 'JSObject', 'Plugin', 'PluginCall', 'PluginMethod', 'PermissionState', 'BridgeActivity', 'annotation.CapacitorPlugin', 'annotation.Permission', 'annotation.PermissionCallback'],
   'androidx.room.': ['Dao', 'Insert', 'Query', 'Update', 'OnConflictStrategy', 'Database', 'Room', 'RoomDatabase', 'Entity', 'Index', 'PrimaryKey', 'migration.Migration'],
   'androidx.core.app.': ['NotificationCompat', 'NotificationManagerCompat']
 };
@@ -347,7 +347,7 @@ export function lintNative(buildDir = HERE) {
     const annotated = (u.src.match(/@PluginMethod/g) || []).length;
     const funs = [...u.src.matchAll(/@PluginMethod[^\n]*\n(?:\s*\/\*\*[\s\S]*?\*\/\s*)?\s*fun\s+(\w+)/g)].length;
     if (annotated !== funs) err(`${u.rel}: ${annotated} @PluginMethod annotation(s) but ${funs} are directly followed by a fun`);
-    if (!/@CapacitorPlugin\(name\s*=\s*"QuranNative"\)/.test(u.src)) err(`${u.rel}: the plugin must be named QuranNative (the web side calls it by that name)`);
+    if (!/@CapacitorPlugin\(\s*name\s*=\s*"QuranNative"/.test(u.src)) err(`${u.rel}: the plugin must be named QuranNative (the web side calls it by that name)`);
   }
   const mainKt = units.find((u) => u.rel === 'MainActivity.kt');
   if (!mainKt) err('MainActivity.kt is missing');

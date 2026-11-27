@@ -194,7 +194,16 @@ Android-কে যাচাই করাতে (`autoVerify`) ওয়েবস
 ## ৮. সমস্যা সমাধান
 
 বিল্ড ব্যর্থ হলে প্রথমে রানের **Summary** দেখুন, তারপর `build-reports` artifact (`qr-patch-report.*.json`, `gradle-*.log`)।
-ব্যর্থ হলেও (ডিবাগ বিল্ডের ক্ষেত্রে) একটি **SAFE MODE APK** বানানোর চেষ্টা হয় — ওটা সীমিত ফিচারের, শুধু "হাতে কিছু ইনস্টল করার মতো থাকুক" সে জন্য, আর রান তবু **লাল (failed)** দেখায়।
+পূর্ণ (full) ডিবাগ বিল্ড ব্যর্থ হলে রানের **Summary-র একদম ওপরে** আসল কারণ (`gradle-error-summary.mjs` দেখায়) আর সম্ভাব্য সমাধান লেখা থাকে; একই কারণ লাল **annotation**-ও হয়ে রান-পেজের মাথায় আসে। তারপর দুই ধাপে ফলব্যাক APK বানানো হয় (রান তবু **লাল (failed)** দেখায়, যাতে সমস্যাটা চোখ এড়িয়ে না যায়):
+
+| ধাপ | ফাইলের নাম | কী আছে |
+|---|---|---|
+| ১ | `…-debug-NO-DB.apk` | সবকিছু — **উইজেট, নির্ভুল অ্যালার্ম, রিমাইন্ডার, নোটিফিকেশন** — শুধু Room-এর annotation processor (`kapt`) ছাড়া, অর্থাৎ লোকাল ডাটাবেস নেই (এখনো কোনো স্ক্রিন সেটি ব্যবহার করে না) |
+| ২ | `…-debug-SAFE-MODE.apk` | Kotlin একেবারেই নেই: **উইজেট নেই, নির্ভুল অ্যালার্ম নেই, নোটিফিকেশন প্লাগইন নেই** — শুধু "হাতে কিছু ইনস্টল করার মতো থাকুক" |
+
+> ⚠️ SAFE-MODE APK দিয়ে উইজেট/অ্যালার্ম/নোটিফিকেশন পরীক্ষা করা যায় না — ওগুলো ওতে বানানোই হয় না। এই লক্ষণ দেখলে (উইজেট লিস্টে নেই, "অ্যালার্মের অনুমতি" দেওয়া যায় না, নোটিফিকেশন চাওয়া হয় না) আগে রানের Summary দেখুন — সম্ভবত পূর্ণ বিল্ড ব্যর্থ হয়েছে।
+
+**ভার্সন জোড়া (`android-build/native/modules.json`):** Kotlin `2.2.20` (Capacitor 8 নিজে যেটি সুপারিশ করে) আর Room `2.8.4`। Room **2.7.0-এর আগের** সংস্করণ Kotlin 2.1+ বোঝে না — `Provided Metadata instance has version 2.1.0, while maximum supported version is 2.0.0` — এটাই আগে পূর্ণ বিল্ড ভাঙার কারণ ছিল। দুটো একসাথে বদলাতে হয়; `self-test.mjs` ও `tests/build-fallbacks.test.js` জোড়াটা পাহারা দেয়।
 
 | বার্তা / লক্ষণ | মানে ও সমাধান |
 |---|---|
@@ -216,7 +225,7 @@ Android-কে যাচাই করাতে (`autoVerify`) ওয়েবস
 export APP_ID=com.techverse.quranbangla APP_NAME="Quran Bangla" APP_VERSION=1.1.0 APP_VERSION_CODE=101 \
        SITE_URL=https://quranbangla.vercel.app WEB_BUNDLE_DIR=$PWD/build/www QR_PROJECT_DIR=/tmp/app
 node android-build/self-test.mjs && node android-build/preflight.mjs
-bash android-build/create-project.sh full      # [safe] = সীমিত ফলব্যাক
+bash android-build/create-project.sh full      # [nodb] = Room ছাড়া ফলব্যাক, [safe] = সীমিত ফলব্যাক
 cd /tmp/app/android && ./gradlew assembleDebug
 ```
 
@@ -316,7 +325,8 @@ cd /tmp/app/android && ./gradlew assembleDebug
 | ফাইল | কাজ |
 |---|---|
 | `.github/workflows/build-apk.yml` | "Build Android app" workflow |
-| `android-build/create-project.sh [full\|safe]` | Capacitor প্রজেক্ট তৈরি + প্যাচ (প্লাগইন ইনস্টল সহ) |
+| `android-build/create-project.sh [full\|nodb\|safe]` | Capacitor প্রজেক্ট তৈরি + প্যাচ (প্লাগইন ইনস্টল সহ); `nodb` = পূর্ণ প্রজেক্ট, শুধু Room-এর annotation processor ছাড়া |
+| `android-build/gradle-error-summary.mjs` | ব্যর্থ বিল্ডের লগ থেকে আসল ত্রুটি, ব্যর্থ টাস্ক ও সহজ ভাষার ইঙ্গিত বের করে রানের Summary-তে দেয় |
 | `android-build/apply-native-patches.mjs` | `config` ও `android` ধাপে `capacitor.config.json`, ম্যানিফেস্ট (পারমিশন, ফিল্টার, শর্টকাট, FCM মেটা-ডেটা), Gradle (ভার্সন, signing, Kotlin/Room), আইকন, স্প্ল্যাশ, `google-services.json`, যাচাই-করা ওয়েব বান্ডল `www/`-এ বসানো, নেটিভ মডিউল (উইজেট, রিমাইন্ডার) বসানো |
 | `android-build/self-test.mjs` | প্যাচ স্ক্রিপ্টের স্বয়ংক্রিয় পরীক্ষা (workflow-র প্রথম ধাপ) |
 | `android-build/preflight.mjs` | repo-র দ্রুত যাচাই |
@@ -324,4 +334,4 @@ cd /tmp/app/android && ./gradlew assembleDebug
 | `android-build/res/` | রিসোর্স টেমপ্লেট (শর্টকাট, নোটিফিকেশন আইকন, স্ট্রিং বাংলা/ইংরেজি, রং) |
 | `scripts/send-prayer-notifications.js` | ওয়াক্তের পুশ (Android পে-লোড যোগ হয়েছে) |
 
-`create-project.sh safe` / `QR_PATCH_LENIENT=1` শুধু জরুরি ফলব্যাকের জন্য — স্বাভাবিক বিল্ডে strict মোড চলে।
+`create-project.sh nodb` / `create-project.sh safe` / `QR_PATCH_LENIENT=1` শুধু জরুরি ফলব্যাকের জন্য — স্বাভাবিক বিল্ডে strict মোড চলে।

@@ -61,6 +61,8 @@ interface NativeCapabilities {
 interface ScheduleReport { scheduled: number; next: Array<{ id: string; at: number }>; refused: number[]; exactAlarms: boolean }
 interface StorageInfo { appBytes: number; freeBytes: number; totalBytes: number }
 interface DatabaseInfo { version: number; counts: Record<string, number> }
+/** The notification permission as the phone sees it. Android 13+ asks at run time (state prompt -> the system dialog); older Android allows by default. */
+interface NativeNotificationPermission { granted: boolean; state: 'granted' | 'denied' | 'prompt' | 'prompt-with-rationale'; needsRuntimePermission: boolean }
 
 /** The Capacitor plugin "QuranNative". Method names are the Kotlin @PluginMethod names. */
 interface QuranNativePlugin {
@@ -72,6 +74,8 @@ interface QuranNativePlugin {
   refreshWidgets(): Promise<{ updated: number }>;
   requestPinWidget(options: { widget: WidgetKey }): Promise<{ supported: boolean; requested: boolean }>;
   openSettings(options: { screen: SettingsScreen }): Promise<{ opened: boolean }>;
+  getNotificationPermission(): Promise<NativeNotificationPermission>;
+  requestNotificationPermission(): Promise<NativeNotificationPermission>;
   getStorageInfo(): Promise<StorageInfo>;
   getDatabaseInfo(): Promise<DatabaseInfo>;
 }
@@ -307,6 +311,16 @@ declare const module: { exports: unknown } | undefined;
     openSettings(screen: SettingsScreen): Promise<boolean> {
       return this.call((p) => p.openSettings({ screen })).then((r) => !!(r && r.opened));
     }
+
+    /** Whether notifications can be shown right now (null when there is no native layer). */
+    notificationPermission(): Promise<NativeNotificationPermission | null> { return this.call((p) => p.getNotificationPermission()); }
+
+    /**
+     * Shows the system permission dialog (Android 13+; older Android already allows notifications) and resolves with the answer.
+     * When `granted` is still false the dialog cannot help any more (it is shown only twice, or notifications are switched off in
+     * the system settings): the caller then opens openSettings('notifications').
+     */
+    requestNotifications(): Promise<NativeNotificationPermission | null> { return this.call((p) => p.requestNotificationPermission()); }
 
     private call<T>(fn: (p: QuranNativePlugin) => Promise<T>): Promise<T | null> {
       const plugin = this.getPlugin();

@@ -2,14 +2,16 @@
   "schema": 1,
   "note": "The native overlay applied by apply-native-patches.mjs in FULL mode (QR_NATIVE_MODULES=all, the default; none = no Kotlin at all). Edit versions here, not in the script.",
   "gradle": {
-    "kotlin": "2.1.21",
-    "room": "2.6.1",
-    "note": "Room is processed with kapt (works with every Kotlin version without matching a KSP release). Capacitor 8 builds with AGP 8.13 / JDK 21."
+    "kotlin": "2.2.20",
+    "room": "2.8.4",
+    "note": "Kotlin 2.2.20 is the version Capacitor 8 itself recommends (AGP 8.13 / Gradle 8.14 / JDK 21). Room MUST be 2.7.0 or newer when Kotlin is 2.1 or newer: Room 2.6.1 stops with 'Provided Metadata instance has version 2.1.0, while maximum supported version is 2.0.0' - that was the reason why the full build failed and only the SAFE-MODE APK (no widgets, no exact alarms, no notification plugins) was produced. Room is processed with kapt, so no KSP version has to match the Kotlin version."
   },
   "kotlinSourceRoot": "kotlin",
   "resourceRoot": "res",
   "manifestComponents": "manifest/components.xml",
   "permissions": "manifest/permissions.txt",
   "mainActivity": "kotlin/MainActivity.kt",
-  "tokens": { "__APP_ID__": "the application id / namespace of the generated project" }
+  "tokens": {
+    "__APP_ID__": "the application id / namespace of the generated project"
+  }
 }

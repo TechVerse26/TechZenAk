@@ -233,6 +233,14 @@
         openSettings(screen) {
             return this.call((p) => p.openSettings({ screen })).then((r) => !!(r && r.opened));
         }
+        /** Whether notifications can be shown right now (null when there is no native layer). */
+        notificationPermission() { return this.call((p) => p.getNotificationPermission()); }
+        /**
+         * Shows the system permission dialog (Android 13+; older Android already allows notifications) and resolves with the answer.
+         * When `granted` is still false the dialog cannot help any more (it is shown only twice, or notifications are switched off in
+         * the system settings): the caller then opens openSettings('notifications').
+         */
+        requestNotifications() { return this.call((p) => p.requestNotificationPermission()); }
         call(fn) {
             const plugin = this.getPlugin();
             if (!plugin)

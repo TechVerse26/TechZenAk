@@ -945,26 +945,41 @@ Store: /home/runner/.android/debug.keystore
   const lint = lintNative(BUILD);
   eq('native-lint finds no error in the committed overlay', lint.errors.length, 0, lint.errors.join('\n'));
   const cfg = readNativeConfig(BUILD);
-  eq('modules.json: Kotlin version', cfg.gradle.kotlin, '2.1.21');
-  eq('modules.json: Room version', cfg.gradle.room, '2.6.1');
+  eq('modules.json: Kotlin version', cfg.gradle.kotlin, '2.2.20');
+  eq('modules.json: Room version', cfg.gradle.room, '2.8.4');
+  // Guard against the failure that made the full build fall back to SAFE MODE: Room older than 2.7.0 cannot read the metadata of
+  // Kotlin 2.1+ ("Provided Metadata instance has version 2.1.0, while maximum supported version is 2.0.0"), so the two must move together.
+  const versionAtLeast = (v, min) => {
+    const a = String(v).split('.').map(Number), b = String(min).split('.').map(Number);
+    for (let i = 0; i < 3; i++) if ((a[i] || 0) !== (b[i] || 0)) return (a[i] || 0) > (b[i] || 0);
+    return true;
+  };
+  check('modules.json: Room is new enough for this Kotlin (Room < 2.7.0 cannot read Kotlin 2.1+ metadata)', !versionAtLeast(cfg.gradle.kotlin, '2.1.0') || versionAtLeast(cfg.gradle.room, '2.7.0'));
   eq('the exact alarm permission is the only extra permission', nativePermissions(BUILD).join(','), 'android.permission.SCHEDULE_EXACT_ALARM');
 
   // --- Gradle edits as pure functions
-  const g1 = patchRootGradleForKotlin(ROOT_GRADLE, '2.1.21');
-  check('root build.gradle: the Kotlin plugin follows the Android Gradle plugin line', g1.changed && /classpath 'com\.android\.tools\.build:gradle:[\d.]+'\n\s+classpath 'org\.jetbrains\.kotlin:kotlin-gradle-plugin:2\.1\.21' \/\/ qr-native-modules/.test(g1.text), g1.text);
+  const g1 = patchRootGradleForKotlin(ROOT_GRADLE, '2.2.20');
+  check('root build.gradle: the Kotlin plugin follows the Android Gradle plugin line', g1.changed && /classpath 'com\.android\.tools\.build:gradle:[\d.]+'\n\s+classpath 'org\.jetbrains\.kotlin:kotlin-gradle-plugin:2\.2\.20' \/\/ qr-native-modules/.test(g1.text), g1.text);
   eq('root build.gradle: the existing classpath lines are untouched', ROOT_GRADLE.split('\n').every((l) => g1.text.includes(l)), true);
-  eq('root build.gradle: a second run changes nothing', patchRootGradleForKotlin(g1.text, '2.1.21').changed, false);
-  eq('root build.gradle: an existing Kotlin plugin is respected', patchRootGradleForKotlin(ROOT_GRADLE.replace("classpath 'com.google.gms:google-services:4.4.4'", "classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.25'"), '2.1.21').changed, false);
-  check('root build.gradle: no Android Gradle plugin line = clear error', throwsWith(() => patchRootGradleForKotlin('buildscript { dependencies { } }', '2.1.21'), /Android Gradle plugin classpath line was not found/));
-  const a1 = patchAppGradleForKotlin(GRADLE_GROOVY, { roomVersion: '2.6.1', jvmTarget: 21 });
+  eq('root build.gradle: a second run changes nothing', patchRootGradleForKotlin(g1.text, '2.2.20').changed, false);
+  eq('root build.gradle: an existing Kotlin plugin is respected', patchRootGradleForKotlin(ROOT_GRADLE.replace("classpath 'com.google.gms:google-services:4.4.4'", "classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.25'"), '2.2.20').changed, false);
+  check('root build.gradle: no Android Gradle plugin line = clear error', throwsWith(() => patchRootGradleForKotlin('buildscript { dependencies { } }', '2.2.20'), /Android Gradle plugin classpath line was not found/));
+  const a1 = patchAppGradleForKotlin(GRADLE_GROOVY, { roomVersion: '2.8.4', jvmTarget: 21 });
   const appIdx = (s) => s.indexOf("apply plugin: 'com.android.application'");
   check('app build.gradle: the Kotlin and kapt plugins are applied right after the application plugin', a1.changed && a1.text.indexOf("apply plugin: 'kotlin-android'") > appIdx(a1.text) && a1.text.indexOf("apply plugin: 'kotlin-kapt'") > a1.text.indexOf("apply plugin: 'kotlin-android'") && a1.text.indexOf("apply plugin: 'kotlin-kapt'") < a1.text.indexOf('android {'));
-  for (const needle of ['implementation "androidx.room:room-runtime:2.6.1"', 'kapt "androidx.room:room-compiler:2.6.1"', 'JvmTarget.JVM_21', 'arg("room.schemaLocation", "$projectDir/schemas")', 'correctErrorTypes = true']) check('app build.gradle contains ' + needle, a1.text.includes(needle));
+  for (const needle of ['implementation "androidx.room:room-runtime:2.8.4"', 'kapt "androidx.room:room-compiler:2.8.4"', 'JvmTarget.JVM_21', 'arg("room.schemaLocation", "$projectDir/schemas")', 'correctErrorTypes = true']) check('app build.gradle contains ' + needle, a1.text.includes(needle));
   eq('app build.gradle: every original line is still there', GRADLE_GROOVY.split('\n').filter((l) => l.trim()).every((l) => a1.text.includes(l)), true);
-  eq('app build.gradle: a second run changes nothing', patchAppGradleForKotlin(a1.text, { roomVersion: '2.6.1', jvmTarget: 21 }).changed, false);
-  check('app build.gradle: JVM 17 is honoured', patchAppGradleForKotlin(GRADLE_GROOVY, { roomVersion: '2.6.1', jvmTarget: 17 }).text.includes('JvmTarget.JVM_17'));
-  check('app build.gradle: no application plugin line = clear error', throwsWith(() => patchAppGradleForKotlin('android { }', { roomVersion: '2.6.1', jvmTarget: 21 }), /com\.android\.application.*was not found/));
-  const already = patchAppGradleForKotlin(GRADLE_GROOVY.replace("apply plugin: 'com.android.application'", "apply plugin: 'com.android.application'\napply plugin: 'kotlin-android'"), { roomVersion: '2.6.1', jvmTarget: 21 });
+  eq('app build.gradle: a second run changes nothing', patchAppGradleForKotlin(a1.text, { roomVersion: '2.8.4', jvmTarget: 21 }).changed, false);
+  // the middle fallback tier (QR_NATIVE_DB=off): everything except the Room annotation processor
+  const nodb = patchAppGradleForKotlin(GRADLE_GROOVY, { roomVersion: '2.8.4', jvmTarget: 21, kapt: false });
+  check('app build.gradle without kapt: the Kotlin plugin is applied, kapt is not', nodb.changed && nodb.text.includes("apply plugin: 'kotlin-android'") && !/kotlin-kapt/.test(nodb.text));
+  check('app build.gradle without kapt: no kapt block and no Room compiler', !/^kapt\s*\{/m.test(nodb.text) && !nodb.text.includes('room-compiler') && !nodb.text.includes('room.schemaLocation'));
+  check('app build.gradle without kapt: the Room runtime and the JVM target stay (the Room classes of the overlay still compile)', nodb.text.includes('implementation "androidx.room:room-runtime:2.8.4"') && nodb.text.includes('JvmTarget.JVM_21'));
+  eq('app build.gradle without kapt: a second run changes nothing', patchAppGradleForKotlin(nodb.text, { roomVersion: '2.8.4', jvmTarget: 21, kapt: false }).changed, false);
+  check('app build.gradle: the default is WITH kapt', patchAppGradleForKotlin(GRADLE_GROOVY, { roomVersion: '2.8.4', jvmTarget: 21 }).text.includes('kapt "androidx.room:room-compiler:2.8.4"'));
+  check('app build.gradle: JVM 17 is honoured', patchAppGradleForKotlin(GRADLE_GROOVY, { roomVersion: '2.8.4', jvmTarget: 17 }).text.includes('JvmTarget.JVM_17'));
+  check('app build.gradle: no application plugin line = clear error', throwsWith(() => patchAppGradleForKotlin('android { }', { roomVersion: '2.8.4', jvmTarget: 21 }), /com\.android\.application.*was not found/));
+  const already = patchAppGradleForKotlin(GRADLE_GROOVY.replace("apply plugin: 'com.android.application'", "apply plugin: 'com.android.application'\napply plugin: 'kotlin-android'"), { roomVersion: '2.8.4', jvmTarget: 21 });
   eq('app build.gradle: a Kotlin plugin that is already applied is not applied twice', (already.text.match(/apply plugin: 'kotlin-android'/g) || []).length, 1);
   eq('gradle.properties: the 1.5 GB default is raised', patchGradleProperties('org.gradle.jvmargs=-Xmx1536m\nandroid.useAndroidX=true\n').text.includes('-Xmx3072m'), true);
   eq('gradle.properties: other flags on that line survive', patchGradleProperties('org.gradle.jvmargs=-Xmx1024m -Dfile.encoding=UTF-8\n').text, 'org.gradle.jvmargs=-Xmx3072m -Dfile.encoding=UTF-8\n');
@@ -987,7 +1002,7 @@ Store: /home/runner/.android/debug.keystore
   const proj = makeProject('native-all');
   const r = run('android', proj, { env: ALL });
   eq('android phase with the native modules succeeds', r.code, 0, r.out);
-  check('the step is reported', /OK\s+Native modules \(Kotlin, Room, widgets, reminders\) - \d+ Kotlin file\(s\), \d+ resource file\(s\), Kotlin 2\.1\.21 \+ Room 2\.6\.1 \(kapt\), JVM target 21, MainActivity\.java replaced by MainActivity\.kt/.test(r.out), r.out);
+  check('the step is reported', /OK\s+Native modules \(Kotlin, Room, widgets, reminders\) - \d+ Kotlin file\(s\), \d+ resource file\(s\), Kotlin 2\.2\.20 \+ Room 2\.8\.4 \(kapt\), JVM target 21, MainActivity\.java replaced by MainActivity\.kt/.test(r.out), r.out);
   const java = path.join(proj, 'android', 'app', 'src', 'main', 'java', 'com', 'techverse', 'quranbangla');
   check('MainActivity.kt replaces MainActivity.java', exists(path.join(java, 'MainActivity.kt')) && !exists(path.join(java, 'MainActivity.java')));
   const mk = read(path.join(java, 'MainActivity.kt'));
@@ -1003,8 +1018,8 @@ Store: /home/runner/.android/debug.keystore
   for (const f of ['layout/qw_widget_next_prayer.xml', 'layout/qw_widget_daily_ayah.xml', 'layout/qw_widget_continue.xml', 'layout/qw_widget_quick.xml', 'layout/qw_widget_reminder.xml', 'xml/qw_provider_next_prayer.xml', 'xml/qw_provider_quick.xml', 'values/qw_colors.xml', 'values-night/qw_colors.xml', 'values/qw_strings.xml', 'values-bn/qw_strings.xml', 'drawable/qw_widget_bg.xml', 'drawable/ic_qw_tasbih.xml']) check('resource installed: ' + f, exists(path.join(resDir, f)));
   const rootG = read(path.join(proj, 'android', 'build.gradle'));
   const appG = read(path.join(proj, 'android', 'app', 'build.gradle'));
-  eq('root build.gradle: Kotlin plugin once', (rootG.match(/kotlin-gradle-plugin:2\.1\.21/g) || []).length, 1);
-  check('app build.gradle: plugins, kapt, Room', appG.includes("apply plugin: 'kotlin-android'") && appG.includes("apply plugin: 'kotlin-kapt'") && appG.includes('androidx.room:room-compiler:2.6.1') && appG.includes('JvmTarget.JVM_21'));
+  eq('root build.gradle: Kotlin plugin once', (rootG.match(/kotlin-gradle-plugin:2\.2\.20/g) || []).length, 1);
+  check('app build.gradle: plugins, kapt, Room', appG.includes("apply plugin: 'kotlin-android'") && appG.includes("apply plugin: 'kotlin-kapt'") && appG.includes('androidx.room:room-compiler:2.8.4') && appG.includes('JvmTarget.JVM_21'));
   check('the version/signing patch of the earlier step is still there', appG.includes('qr-android-build'));
   check('gradle.properties has the larger heap', /org\.gradle\.jvmargs=-Xmx3072m/.test(read(path.join(proj, 'android', 'gradle.properties'))));
   const man = read(path.join(proj, 'android', 'app', 'src', 'main', 'AndroidManifest.xml'));
@@ -1032,6 +1047,18 @@ Store: /home/runner/.android/debug.keystore
   const safeP = makeProject('native-safe');
   eq('the SAFE fallback build never has the overlay (even with QR_NATIVE_MODULES=all)', run('android', safeP, { mode: 'safe', env: ALL }).code, 0);
   check('... nothing of it is there', !exists(path.join(safeP, 'android/app/src/main/java/com/techverse/quranbangla/MainActivity.kt')) && !exists(path.join(safeP, 'android/app/src/main/res/layout/qw_widget_quick.xml')));
+  // the middle fallback tier, through the command line exactly as `create-project.sh nodb` runs it: the whole overlay, no kapt
+  const nodbProj = makeProject('native-nodb');
+  const nodbRun = run('android', nodbProj, { env: { ...ALL, QR_NATIVE_DB: 'off' } });
+  eq('QR_NATIVE_DB=off succeeds', nodbRun.code, 0, nodbRun.out);
+  const nodbG = read(path.join(nodbProj, 'android/app/build.gradle'));
+  check('nodb: Kotlin yes, kapt / Room compiler no, Room runtime yes', nodbG.includes("apply plugin: 'kotlin-android'") && !/kotlin-kapt|room-compiler|room\.schemaLocation/.test(nodbG) && nodbG.includes('androidx.room:room-runtime:2.8.4'));
+  check('nodb: the whole overlay is still there (widgets, reminders, bridge, manifest components)', exists(path.join(nodbProj, 'android/app/src/main/java/com/techverse/quranbangla/widgets/WidgetUpdater.kt')) && exists(path.join(nodbProj, 'android/app/src/main/java/com/techverse/quranbangla/reminders/ReminderScheduler.kt')) && read(path.join(nodbProj, 'android/app/src/main/AndroidManifest.xml')).includes('android.permission.SCHEDULE_EXACT_ALARM'));
+  const nodbAgain = run('android', nodbProj, { env: { ...ALL, QR_NATIVE_DB: 'off' } });
+  eq('nodb: a second run succeeds and changes nothing', nodbAgain.code, 0, nodbAgain.out);
+  eq('nodb: the Gradle file is identical after the second run', read(path.join(nodbProj, 'android/app/build.gradle')), nodbG);
+  const badDb = run('android', makeProject('native-baddb'), { env: { ...ALL, QR_NATIVE_DB: 'maybe' } });
+  check('an unknown QR_NATIVE_DB value is rejected', badDb.code === 1 && /QR_NATIVE_DB must be "on" or "off"/.test(badDb.out), badDb.out);
   const bad = run('android', makeProject('native-badenv'), { env: { QR_NATIVE_MODULES: 'some' } });
   check('an unknown QR_NATIVE_MODULES value is rejected', bad.code === 1 && /QR_NATIVE_MODULES must be "all" or "none"/.test(bad.out), bad.out);
 

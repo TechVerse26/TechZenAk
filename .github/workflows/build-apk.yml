@@ -63,7 +63,7 @@ concurrency:
 env:
   APP_NAME: Quran Bangla
   APP_ID: com.techverse.quranbangla
-  SITE_URL: https://quranbangla.vercel.app1  # optional backend + App Links host. The app does NOT load this site.
+  SITE_URL: https://quran.imrantech.cyou   # optional backend + App Links host. The app does NOT load this site.
   DEFAULT_VERSION_NAME: '01.02.07'    # shown to users - change it when you publish a new version
   VERSION_CODE_BASE: '200'         # automatic versionCode = this + run number (always grows, Google Play needs that)
   QR_PROJECT_DIR: /tmp/app
@@ -204,7 +204,7 @@ jobs:
         continue-on-error: true
         env:
           GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
-        run: bash android-build/create-project.sh full
+        run: bash android-build/create-project.sh full 2>&1 | tee "$RUNNER_TEMP/create-project-full.log"
 
       # ONE fixed debug key for EVERY debug build. Android installs an APK over an installed app only when both were signed with
       # the SAME key; otherwise the installer shows "App not installed as package conflicts with an existing package".
@@ -287,9 +287,28 @@ jobs:
           cp app/build/outputs/apk/release/app-release.apk "$GITHUB_WORKSPACE/dist/${FILE_STEM}-release.apk"
           cp app/build/outputs/bundle/release/app-release.aab "$GITHUB_WORKSPACE/dist/${FILE_STEM}-release.aab"
 
-      - name: Build debug APK in safe mode (fallback)
-        id: debug_safe
+      # Fallback 1: the same app WITHOUT the Room annotation processor (kapt) - the most fragile part of the toolchain and the reason
+      # why the full build used to fail. Widgets, reminders, precise alarms and notifications are all there; only the local database
+      # (which no screen uses yet) is left out. The run is still reported as failed (see the last step).
+      - name: Build debug APK without the Room annotation processor (fallback 1)
+        id: debug_nodb
         if: env.DO_DEBUG == 'true' && (steps.create_full.outcome == 'failure' || steps.debug_full.outcome == 'failure')
+        continue-on-error: true
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          echo "::warning::The normal debug build failed. A second try is made WITHOUT the Room annotation processor (kapt): widgets, reminders, precise alarms and notifications stay - only the local database is left out. This run is still reported as failed."
+          rm -f "$GITHUB_WORKSPACE"/dist/*-debug-NO-DB.apk
+          bash android-build/create-project.sh nodb 2>&1 | tee "$RUNNER_TEMP/create-project-nodb.log"
+          cd /tmp/app/android
+          chmod +x gradlew
+          ./gradlew assembleDebug --stacktrace 2>&1 | tee "$RUNNER_TEMP/gradle-debug-nodb.log"
+          cp app/build/outputs/apk/debug/app-debug.apk "$GITHUB_WORKSPACE/dist/${FILE_STEM}-debug-NO-DB.apk"
+
+      # Fallback 2: no Kotlin at all (no widgets, no precise alarms, no notification plugins) - only when fallback 1 failed too.
+      - name: Build debug APK in safe mode (fallback 2)
+        id: debug_safe
+        if: env.DO_DEBUG == 'true' && (steps.create_full.outcome == 'failure' || steps.debug_full.outcome == 'failure') && steps.debug_nodb.outcome != 'success'
         env:
           GOOGLE_SERVICES_JSON: ''
         run: |
@@ -412,6 +431,7 @@ jobs:
             /tmp/app/qr-patch-report.*.json
             /tmp/app/android/app/schemas/
             ${{ runner.temp }}/gradle-*.log
+            ${{ runner.temp }}/create-project-*.log
           if-no-files-found: ignore
 
       - name: Publish the debug APK to Releases
@@ -424,7 +444,7 @@ jobs:
           tag="build-${GITHUB_RUN_NUMBER}"
           title="$APP_NAME #${GITHUB_RUN_NUMBER} (debug $APP_VERSION)"
           note="Debug APK for testing - not for Google Play. Version $APP_VERSION ($APP_VERSION_CODE), commit ${GITHUB_SHA::7}."
-          case "${apk[0]}" in *SAFE-MODE*) title="$title SAFE MODE"; note="SAFE MODE: reduced build produced because the full build failed. $note" ;; esac
+          case "${apk[0]}" in *NO-DB*) title="$title NO-DB"; note="NO-DB: the full build failed, so this is the same app built WITHOUT the Room annotation processor - widgets, precise alarms, reminders and notifications are all included, only the local database is left out. Fix the failed full build (see the step summary of the run). / NO-DB: পূর্ণ বিল্ড ব্যর্থ হওয়ায় Room ছাড়া বিল্ড — উইজেট, অ্যালার্ম, রিমাইন্ডার ও নোটিফিকেশন আছে, শুধু লোকাল ডাটাবেস নেই। $note" ;; *SAFE-MODE*) title="$title SAFE MODE"; note="SAFE MODE: reduced build produced because the full build failed - it has NO home screen widgets, NO precise (exact) alarms and NO notification plugins. Do not use it to test those features; fix the failed build first (see the step summary of the run). / SAFE MODE: পূর্ণ বিল্ড ব্যর্থ হওয়ায় সীমিত বিল্ড — এতে হোম-স্ক্রিন উইজেট, নির্ভুল অ্যালার্ম ও নোটিফিকেশন প্লাগইন নেই। $note" ;; esac
           hint="Install: download the .apk file below on your phone and open it (Android may ask you to allow installing from this source). / ইনস্টল: নিচের .apk ফাইলটি ফোনে ডাউনলোড করে খুলুন (Android চাইলে এই উৎস থেকে ইনস্টলের অনুমতি দিন)।"
           case "${KEY_STATUS:-unknown}" in
             ok) keyline="Signing key (SHA-256): ${KEY_SHA256}. Builds signed with this same key install over each other without uninstalling (builds made before this key was fixed used other keys: uninstall those once). / সাইনিং কী: একই কী-র বিল্ডগুলো একটার ওপর আরেকটা আনইনস্টল ছাড়াই ইনস্টল হয় (এই কী ঠিক হওয়ার আগের বিল্ডের কী আলাদা ছিল — সেগুলো একবার আনইনস্টল করুন)।" ;;
@@ -485,15 +505,23 @@ jobs:
       - name: Mark the run as failed when the full build failed
         if: always() && (steps.create_full.outcome == 'failure' || steps.debug_full.outcome == 'failure')
         run: |
+          log="$RUNNER_TEMP/gradle-debug-full.log"
+          [ -f "$log" ] || log="$RUNNER_TEMP/create-project-full.log"
           {
             echo '### The full build failed'
             echo
-            echo 'See the red step above. A reduced "SAFE-MODE" debug APK was built as a fallback where possible (artifact `QuranBangla-debug-apk`).'
+            echo 'Fallbacks after the failed full build (artifact `QuranBangla-debug-apk`; the file name says which one was built):'
+            echo '1. `...-debug-NO-DB.apk` = the same app WITHOUT the Room annotation processor: widgets, precise alarms, reminders and notifications are all there, only the local database is missing. Result of this fallback: **${{ steps.debug_nodb.outcome }}**.'
+            echo '2. `...-debug-SAFE-MODE.apk` = no Kotlin at all: **NO home screen widgets, NO precise alarms, NO notification plugins** - it cannot be used to test those features. Result of this fallback: **${{ steps.debug_safe.outcome }}**.'
+            echo '**SAFE-MODE APK-তে হোম-স্ক্রিন উইজেট, নির্ভুল অ্যালার্ম ও নোটিফিকেশন প্লাগইন নেই; NO-DB APK-তে সবই আছে, শুধু লোকাল ডাটাবেস নেই।**'
             echo
-            echo 'Last lines of the Gradle log:'
-            echo '```'
-            tail -n 60 "$RUNNER_TEMP/gradle-debug-full.log" 2>/dev/null || echo '(no Gradle log: the failure happened while creating the project)'
-            echo '```'
+            node android-build/gradle-error-summary.mjs "$log" || echo '(the log could not be summarised)'
+            if [ -f "$RUNNER_TEMP/gradle-debug-nodb.log" ] && [ "${{ steps.debug_nodb.outcome }}" = "failure" ]; then
+              echo
+              echo '#### The fallback build without Room failed as well'
+              node android-build/gradle-error-summary.mjs "$RUNNER_TEMP/gradle-debug-nodb.log" || true
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
-          echo "::error::The full build failed. Details are in the step summary and in the 'build-reports' artifact."
+          node android-build/gradle-error-summary.mjs "$log" --annotations || true
+          echo "::error::The full build failed. The reason is at the top of the step summary; the whole log is in the 'build-reports' artifact."
           exit 1

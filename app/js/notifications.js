@@ -52,26 +52,57 @@
   }
 
   // ---------- permission ----------
-  // -> 'granted' | 'denied' | 'prompt' | 'unsupported'
-  notify.permission = function(){
+  // The phone's own notification permission is asked through the native bridge (QuranNative.requestNotificationPermission): it works
+  // whichever notification plugins this build has, and it shows the Android 13+ system dialog. The Capacitor plugins are the
+  // second way, for a build whose native layer is missing.
+  function nativeBridge(){
+    var b = window.QR_NATIVE;
+    return b && typeof b.isAvailable === 'function' && b.isAvailable() ? b : null;
+  }
+  function pluginPermission(){
     var p = PN() || LN();
     if(!p || typeof p.checkPermissions !== 'function') return Promise.resolve('unsupported');
     return p.checkPermissions().then(function(r){
       var v = (r && (r.receive || r.display)) || 'prompt';
       return v === 'prompt-with-rationale' ? 'prompt' : v;
     }).catch(function(){ return 'unsupported'; });
+  }
+  // -> 'granted' | 'denied' | 'prompt' | 'unsupported'
+  notify.permission = function(){
+    var nb = nativeBridge();
+    if(!nb) return pluginPermission();
+    return nb.notificationPermission().then(function(r){
+      if(!r) return pluginPermission();
+      if(r.granted) return 'granted';
+      return r.state === 'denied' ? 'denied' : 'prompt';
+    });
   };
-  function requestPermission(){
+  function requestViaPlugin(){
     var p = PN() || LN();
     if(!p || typeof p.requestPermissions !== 'function') return Promise.resolve(false);
-    return notify.permission().then(function(cur){
+    return pluginPermission().then(function(cur){
       if(cur === 'granted') return true;
       return p.requestPermissions().then(function(r){ return ((r && (r.receive || r.display)) || '') === 'granted'; });
     }).catch(function(){ return false; });
   }
+  function requestPermission(){
+    var nb = nativeBridge();
+    if(!nb) return requestViaPlugin();
+    // the bridge's answer is final: a person who just said "don't allow" is not asked a second time in the same breath
+    return nb.requestNotifications().then(function(r){ return r ? !!r.granted : requestViaPlugin(); }).catch(function(){ return false; });
+  }
   function explainBlocked(){
-    return UI.alert(T('নোটিফিকেশন বন্ধ আছে', 'Notifications are off'),
-      T('ফোনের Settings > Apps > কুরআন বাংলা > Notifications থেকে নোটিফিকেশন চালু করুন, তারপর আবার চেষ্টা করুন।', 'Open your phone\'s Settings > Apps > Quran Bangla > Notifications, turn notifications on, then try again.'));
+    var nb = nativeBridge();
+    if(!nb){
+      return UI.alert(T('নোটিফিকেশন বন্ধ আছে', 'Notifications are off'),
+        T('ফোনের Settings > Apps > কুরআন বাংলা > Notifications থেকে নোটিফিকেশন চালু করুন, তারপর আবার চেষ্টা করুন।', 'Open your phone\'s Settings > Apps > Quran Bangla > Notifications, turn notifications on, then try again.'));
+    }
+    // a button that opens the right settings page, so the person does not have to find it
+    return UI.confirm({
+      title: T('নোটিফিকেশন বন্ধ আছে', 'Notifications are off'),
+      text: T('নোটিফিকেশন চালু করতে ফোনের সেটিংস খুলুন, নোটিফিকেশন চালু করে অ্যাপে ফিরে এসে আবার চেষ্টা করুন।', 'Open the phone settings, switch notifications on, then come back to the app and try again.'),
+      confirmLabel: T('সেটিংস খুলুন', 'Open settings')
+    }).then(function(ok){ if(ok) nb.openSettings('notifications'); });
   }
 
   // ---------- push registration ----------

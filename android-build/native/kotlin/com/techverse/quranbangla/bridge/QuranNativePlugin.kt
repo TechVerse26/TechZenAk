@@ -1,6 +1,6 @@
 package com.techverse.quranbangla.bridge
 
-import android.app.AlarmManager
+import android.Manifest
 import android.appwidget.AppWidgetManager
 import android.content.ComponentName
 import android.content.Context
@@ -15,8 +15,11 @@ import com.getcapacitor.JSArray
 import com.getcapacitor.JSObject
 import com.getcapacitor.Plugin
 import com.getcapacitor.PluginCall
+import com.getcapacitor.PermissionState
 import com.getcapacitor.PluginMethod
 import com.getcapacitor.annotation.CapacitorPlugin
+import com.getcapacitor.annotation.Permission
+import com.getcapacitor.annotation.PermissionCallback
 import com.techverse.quranbangla.core.NativeStore
 import com.techverse.quranbangla.core.QuranAssets
 import com.techverse.quranbangla.db.AppDatabase
@@ -25,6 +28,9 @@ import com.techverse.quranbangla.reminders.ReminderScheduler
 import com.techverse.quranbangla.widgets.WidgetUpdater
 import java.io.File
 
+/** Capacitor permission alias of POST_NOTIFICATIONS (a top-level constant: annotation arguments must be compile-time constants). */
+private const val NOTIFICATIONS = "notifications"
+
 /**
  * The typed bridge between the web app (TypeScript: js/quran-native.js, src/native/quran-native.ts) and Kotlin.
  * The contract is declared once, in src/native/quran-native.ts, and tests/native-bridge.test.js checks that every method
@@ -32,7 +38,11 @@ import java.io.File
  *
  * Capacitor runs plugin methods on a background thread, so Room (which refuses main-thread queries) can be used directly.
  */
-@CapacitorPlugin(name = "QuranNative")
+@CapacitorPlugin(
+    name = "QuranNative",
+    // Android 13+ (API 33): notifications need a run-time permission. The alias is what requestPermissionForAlias() asks for.
+    permissions = [Permission(strings = [Manifest.permission.POST_NOTIFICATIONS], alias = NOTIFICATIONS)]
+)
 class QuranNativePlugin : Plugin() {
     private companion object {
         const val BRIDGE_VERSION = 1
@@ -159,30 +169,92 @@ class QuranNativePlugin : Plugin() {
         call.resolve(JSObject().put("supported", supported).put("requested", requested))
     }
 
+    // ------------------------------------------------------------------------------------------------ notification permission
+    /** The notification permission as the phone sees it right now (it can change while the app is open, in the system settings). */
+    @PluginMethod
+    fun getNotificationPermission(call: PluginCall) {
+        call.resolve(notificationState())
+    }
+
+    /**
+     * Android 13+ shows the system dialog (the system shows it at most twice; after that the answer is "denied" at once and only
+     * the system settings can help - the web app then opens them with openSettings("notifications")). Older Android allows
+     * notifications by default, so the answer comes back immediately.
+     */
+    @PluginMethod
+    fun requestNotificationPermission(call: PluginCall) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || getPermissionState(NOTIFICATIONS) == PermissionState.GRANTED) {
+            call.resolve(notificationState())
+            return
+        }
+        requestPermissionForAlias(NOTIFICATIONS, call, "notificationPermissionResult")
+    }
+
+    /** Called by Capacitor after the system dialog was answered. Public on purpose: Capacitor finds it by name. */
+    @PermissionCallback
+    fun notificationPermissionResult(call: PluginCall) {
+        call.resolve(notificationState())
+    }
+
+    private fun notificationState(): JSObject {
+        val enabled = NotificationManagerCompat.from(context).areNotificationsEnabled()
+        val needsRuntime = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+        val runtime = if (needsRuntime) (getPermissionState(NOTIFICATIONS)?.toString() ?: "prompt") else "granted"
+        // "granted" means notifications really can be shown: the permission AND the switch in the system settings
+        val state = if (enabled) "granted" else if (runtime == "granted") "denied" else runtime
+        return JSObject().put("granted", enabled).put("state", state).put("needsRuntimePermission", needsRuntime)
+    }
+
     // ------------------------------------------------------------------------------------------------ system settings
-    /** screen: exact-alarms | notifications | battery | app. Opens the matching Android settings page. */
+    /**
+     * screen: exact-alarms | notifications | battery | app. Opens the matching Android settings page; when this phone has no such
+     * page the app's own settings page is opened instead, so the person is never left with a button that does nothing.
+     */
     @PluginMethod
     fun openSettings(call: PluginCall) {
         val screen = call.getString("screen") ?: ""
         val pkg = context.packageName
-        val intent: Intent? = when (screen) {
-            "exact-alarms" ->
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, Uri.parse("package:$pkg")) else null
-            "notifications" -> Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, pkg)
-            "battery" -> Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
-            "app" -> Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$pkg"))
-            else -> null
+        val packageUri = Uri.parse("package:$pkg")
+        val appDetails = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, packageUri)
+        val candidates = ArrayList<Intent>()
+        when (screen) {
+            "exact-alarms" -> {
+                // "Alarms & reminders" of this app (Android 12+; the permission SCHEDULE_EXACT_ALARM must be in the manifest)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) candidates.add(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, packageUri))
+                candidates.add(appDetails)
+            }
+            "notifications" -> {
+                candidates.add(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, pkg))
+                candidates.add(appDetails)
+            }
+            "battery" -> {
+                candidates.add(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                candidates.add(appDetails)
+            }
+            "app" -> candidates.add(appDetails)
         }
-        if (intent == null) {
-            call.resolve(JSObject().put("opened", false))
-            return
+        for (intent in candidates) {
+            if (startSettings(intent)) {
+                call.resolve(JSObject().put("opened", true))
+                return
+            }
         }
-        try {
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            context.startActivity(intent)
-            call.resolve(JSObject().put("opened", true))
+        call.resolve(JSObject().put("opened", false))
+    }
+
+    /** Starts a settings page inside the app's own task (the back button returns to the app). */
+    private fun startSettings(intent: Intent): Boolean {
+        return try {
+            val host = activity
+            if (host != null) {
+                host.startActivity(intent)
+            } else {
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                context.startActivity(intent)
+            }
+            true
         } catch (e: Exception) {
-            call.resolve(JSObject().put("opened", false))
+            false
         }
     }
 

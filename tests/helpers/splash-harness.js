@@ -1,10 +1,10 @@
 'use strict';
-// Shared harness of the browser tests of the Android launch splash (tests/ui/splash.ui.test.js, tests/ui/splash.real.ui.test.js):
-// a static server for the repository, the Capacitor native shell simulated, and launch() which opens the REAL app in headless
-// Chromium as the Android app. External hosts (Firebase, CDNs) are blocked, so the app runs offline.
+// Shared harness of the browser tests of the Android launch splash (tests/ui/splash.ui.test.js): a static server for the repository,
+// the Capacitor native shell simulated, and launch() which opens the REAL app in headless Chromium as the Android app. External
+// hosts (Firebase, CDNs) are blocked, so the app runs offline.
 //
-// The lottie runtime served at /assets/vendor/lottie/lottie_svg.min.js is, by default, the stand-in tests/helpers/lottie-runtime-stub.js;
-// with { server: { runtime: 'real' } } it is the real vendored lottie-web (or the file named by SPLASH_REAL_RUNTIME_FILE).
+// The splash is drawn in code (app/js/splash.js: inline SVG + CSS animation) - there is no animation file and no runtime to stand in
+// for, so what the tests see is exactly what the phone runs.
 const fs = require('node:fs');
 const path = require('node:path');
 const http = require('node:http');
@@ -14,10 +14,8 @@ try { pw = require(process.env.PLAYWRIGHT_MODULE || 'playwright'); } catch (e) {
 const SKIP = pw ? false : 'Playwright is not installed (set PLAYWRIGHT_MODULE or run npm i --no-save playwright)';
 
 const ROOT = path.resolve(__dirname, '..', '..');
-const STUB = fs.readFileSync(path.join(ROOT, 'tests', 'helpers', 'lottie-runtime-stub.js'), 'utf8');
-const RUNTIME = '/assets/vendor/lottie/lottie_svg.min.js';
-const DATA = '/assets/animations/quran-bangla-splash.json';
-const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'application/javascript', '.mjs': 'application/javascript', '.css': 'text/css', '.json': 'application/json', '.png': 'image/png', '.svg': 'image/svg+xml', '.webmanifest': 'application/manifest+json', '.ico': 'image/x-icon', '.txt': 'text/plain', '.xml': 'application/xml' };
+const SCRIPT = '/app/js/splash.js';
+const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'application/javascript', '.mjs': 'application/javascript', '.css': 'text/css', '.json': 'application/json', '.png': 'image/png', '.svg': 'image/svg+xml', '.webmanifest': 'application/manifest+json', '.webp': 'image/webp', '.ico': 'image/x-icon', '.woff2': 'font/woff2' };
 const ANDROID_UA = 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Mobile Safari/537.36 QuranBanglaApp/1.0.0';
 const DESKTOP_UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36';
 
@@ -47,13 +45,11 @@ window.__mark = function(n){ window.__tl.push([n, Math.round(performance.now())]
 window.addEventListener('qr:app-ready', function(){ window.__mark('app-ready'); });
 window.addEventListener('qr:splash-done', function(){ window.__mark('splash-done'); });`;
 
-// ---- a static server for the repository; the lottie runtime is always the stand-in ----
+// ---- a static server for the repository ----
+//   opts.missing: paths answered with 404      opts.delay: { path: ms } answered late
 function serve(opts) {
   opts = opts || {};
   const hits = [];
-  const runtimeSource = () => (opts.runtime === 'real'
-    ? fs.readFileSync(process.env.SPLASH_REAL_RUNTIME_FILE || path.join(ROOT, 'assets', 'vendor', 'lottie', 'lottie_svg.min.js'))
-    : STUB);
   const server = http.createServer((req, res) => {
     let p = decodeURIComponent(new URL(req.url, 'http://x').pathname);
     if (p.endsWith('/')) p += 'index.html';
@@ -61,7 +57,6 @@ function serve(opts) {
     const send = (code, body, type) => { res.writeHead(code, { 'content-type': type || 'text/plain', 'cache-control': 'no-store' }); res.end(body); };
     const go = () => {
       if ((opts.missing || []).includes(p)) return send(404, 'not found');
-      if (p === RUNTIME) return send(200, runtimeSource(), 'application/javascript');
       const f = path.join(ROOT, p);
       if (!f.startsWith(ROOT) || !fs.existsSync(f) || fs.statSync(f).isDirectory()) return send(404, 'not found');
       send(200, fs.readFileSync(f), MIME[path.extname(f)] || 'application/octet-stream');
@@ -74,20 +69,19 @@ function serve(opts) {
   })));
 }
 
-
 async function launch(browser, o) {
   o = o || {};
   const srv = await serve(o.server);
   const ctx = await browser.newContext({
     viewport: o.viewport || { width: 412, height: 915 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true,
-    userAgent: o.userAgent || ANDROID_UA, serviceWorkers: o.serviceWorkers || 'block'
+    userAgent: o.userAgent || ANDROID_UA, serviceWorkers: o.serviceWorkers || 'block',
+    reducedMotion: o.reducedMotion || 'no-preference'
   });
   await ctx.route('**/*', (route) => (new URL(route.request().url()).hostname === '127.0.0.1' ? route.continue() : route.abort()));
   const page = await ctx.newPage();
   const errors = [];
   page.on('pageerror', (e) => errors.push(String(e.message)));
   if (o.capacitor !== false) await page.addInitScript(CAPACITOR);
-  await page.addInitScript('window.__LOTTIE_STUB__ = ' + JSON.stringify(o.stub || {}) + ';');
   await page.addInitScript(MARKS);
   if (o.init) await page.addInitScript(o.init);
   const L = {
@@ -100,7 +94,6 @@ async function launch(browser, o) {
       return {
         isApp: P && P.isApp, dataPlatform: document.documentElement.getAttribute('data-platform'),
         tl: window.__tl || [], hide: nat.splashHide, bars: nat.bars,
-        calls: window.__lottie ? window.__lottie.calls : [], events: window.__lottie ? window.__lottie.events : [],
         info: S && S.info, phase: S && S.phase, holds: S && S.holdsNative, hasSplash: !!S,
         overlay: !!document.getElementById('qa-splash'), style: !!document.getElementById('qa-splash-style'),
         body: getComputedStyle(document.body).visibility, appReady: !!(P && P.ready)
@@ -111,4 +104,4 @@ async function launch(browser, o) {
   return L;
 }
 
-module.exports = { pw, SKIP, ROOT, RUNTIME, DATA, ANDROID_UA, DESKTOP_UA, serve, launch };
+module.exports = { pw, SKIP, ROOT, SCRIPT, ANDROID_UA, DESKTOP_UA, serve, launch };

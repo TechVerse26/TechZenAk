@@ -638,7 +638,11 @@ function readSettings(env) {
     // NOT load this site - it runs from the web bundle inside the APK. LIVE_URL is the old name of the same setting.
     siteUrl: (env.SITE_URL || env.LIVE_URL || '').trim(),
     // the Kotlin overlay (widgets, reminders, Room database, bridge): all (default) or none. Only FULL mode uses it.
-    nativeModules: String(env.QR_NATIVE_MODULES == null ? 'all' : env.QR_NATIVE_MODULES).trim().toLowerCase()
+    nativeModules: String(env.QR_NATIVE_MODULES == null ? 'all' : env.QR_NATIVE_MODULES).trim().toLowerCase(),
+    // "off" = the middle fallback tier (create-project.sh nodb): everything of the Kotlin overlay EXCEPT the Room annotation
+    // processor (kapt), which is the most fragile part of the toolchain. Widgets, reminders, alarms and notifications still work;
+    // only the local database (getDatabaseInfo) is unavailable. The workflow uses it when the full build fails.
+    nativeDb: String(env.QR_NATIVE_DB == null ? 'on' : env.QR_NATIVE_DB).trim().toLowerCase()
   };
   const errors = [];
   if (!/^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)+$/.test(s.appId)) errors.push('APP_ID is not a valid Android application id: "' + s.appId + '"');
@@ -657,6 +661,9 @@ function readSettings(env) {
   if (['all', '1', 'on', 'true', ''].includes(s.nativeModules)) s.nativeModules = true;
   else if (['none', '0', 'off', 'false'].includes(s.nativeModules)) s.nativeModules = false;
   else errors.push('QR_NATIVE_MODULES must be "all" or "none", got "' + s.nativeModules + '"');
+  if (['on', 'all', '1', 'true', ''].includes(s.nativeDb)) s.nativeDb = true;
+  else if (['off', 'none', '0', 'false'].includes(s.nativeDb)) s.nativeDb = false;
+  else errors.push('QR_NATIVE_DB must be "on" or "off", got "' + s.nativeDb + '"');
   if (errors.length) throw new PatchError(errors.join('\n'));
   return s;
 }
@@ -829,35 +836,45 @@ export function patchRootGradleForKotlin(text, kotlinVersion) {
 }
 
 /** Applies the Kotlin + kapt plugins and adds Room to android/app/build.gradle. */
-export function patchAppGradleForKotlin(text, { roomVersion, jvmTarget }) {
+export function patchAppGradleForKotlin(text, { roomVersion, jvmTarget, kapt = true }) {
   if (text.includes(NATIVE_MARK)) return { text, changed: false };
   const apply = /^([ \t]*)apply plugin:\s*(['"])com\.android\.application\2[^\n]*$/m.exec(text);
   if (!apply) throw new Error("android/app/build.gradle: \"apply plugin: 'com.android.application'\" was not found, cannot add the Kotlin plugin");
   const plugins = [];
   if (!/kotlin-android|org\.jetbrains\.kotlin\.android/.test(text)) plugins.push(`${apply[1]}apply plugin: 'kotlin-android' // ${NATIVE_MARK}`);
-  if (!/kotlin-kapt|org\.jetbrains\.kotlin\.kapt/.test(text)) plugins.push(`${apply[1]}apply plugin: 'kotlin-kapt' // ${NATIVE_MARK}`);
+  if (kapt && !/kotlin-kapt|org\.jetbrains\.kotlin\.kapt/.test(text)) plugins.push(`${apply[1]}apply plugin: 'kotlin-kapt' // ${NATIVE_MARK}`);
   const end = apply.index + apply[0].length;
   let out = text.slice(0, end) + (plugins.length ? '\n' + plugins.join('\n') : '') + text.slice(end);
-  out = out.replace(/\s*$/, '\n') + `
-// ---- ${NATIVE_MARK}: Kotlin, Room (annotation processing with kapt) and the native modules of android-build/native ----
+  const head = `
+// ---- ${NATIVE_MARK}: Kotlin, Room${kapt ? ' (annotation processing with kapt)' : ' runtime WITHOUT the annotation processor (QR_NATIVE_DB=off)'} and the native modules of android-build/native ----
 // Kotlin must produce the same JVM bytecode level as the Java code of the app (Capacitor sets it in capacitor.build.gradle).
 tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
     compilerOptions {
         jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_${jvmTarget})
     }
 }
-kapt {
+`;
+  const kaptBlock = `kapt {
     correctErrorTypes = true
     arguments {
         // the Room schema of every database version is exported here (commit schemas/<n>.json when the version changes)
         arg("room.schemaLocation", "$projectDir/schemas")
     }
 }
-dependencies {
+`;
+  const deps = kapt
+    ? `dependencies {
     implementation "androidx.room:room-runtime:${roomVersion}"
     kapt "androidx.room:room-compiler:${roomVersion}"
 }
+`
+    : `dependencies {
+    // the Room classes of the overlay still compile against the runtime; without the processor AppDatabase_Impl is never generated,
+    // so opening the database fails at run time - QuranNativePlugin.getDatabaseInfo reports that as an error, nothing else uses it
+    implementation "androidx.room:room-runtime:${roomVersion}"
+}
 `;
+  out = out.replace(/\s*$/, '\n') + head + (kapt ? kaptBlock : '') + deps;
   return { text: out, changed: true };
 }
 
@@ -913,7 +930,7 @@ function applyNativeOverlay(ctx) {
   if (!exists(rootGradle) || !exists(appGradle)) throw new Error('the Kotlin modules need the Groovy Gradle files (android/build.gradle, android/app/build.gradle); a Kotlin DSL project is not supported');
   const jvmTarget = detectJvmTarget(appDir);
   const r1 = patchRootGradleForKotlin(read(rootGradle), cfg.gradle.kotlin);
-  const r2 = patchAppGradleForKotlin(read(appGradle), { roomVersion: cfg.gradle.room, jvmTarget });
+  const r2 = patchAppGradleForKotlin(read(appGradle), { roomVersion: cfg.gradle.room, jvmTarget, kapt: ctx.S.nativeDb });
   if (r1.changed) writes.push({ file: rootGradle, text: r1.text });
   if (r2.changed) writes.push({ file: appGradle, text: r2.text });
   const props = path.join(androidDir, 'gradle.properties');

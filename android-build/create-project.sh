@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
 # ---------------------------------------------------------------------------------------------------------------------
-# android-build/create-project.sh [full|safe]
+# android-build/create-project.sh [full|nodb|safe]
 #
 # Generates a fresh Capacitor Android project in $QR_PROJECT_DIR (default /tmp/app) and applies
 # android-build/apply-native-patches.mjs to it. Used by .github/workflows/build-apk.yml; it can also be run by hand on a
 # machine that has Node.js 22+ and the Android SDK (set the variables below first).
 #
 #   full  everything: push notifications, local reminders, deep links, shortcuts, adaptive icon, splash
-#   safe  reduced build (the previous workflow's feature set + version/signing). The workflow only uses it as an
-#         automatic fallback when a full DEBUG build fails.
+#   nodb  full, WITHOUT the Room annotation processor (kapt): widgets, reminders, precise alarms, notifications, deep links,
+#         shortcuts, splash - everything except the local database. The workflow's first automatic fallback when the full DEBUG
+#         build fails, so a problem in the most fragile part of the toolchain does not cost the person the widgets and alarms.
+#   safe  reduced build (the previous workflow's feature set + version/signing, NO Kotlin at all). The workflow's last automatic
+#         fallback when even the nodb DEBUG build fails.
 #
 # The app is STANDALONE: it runs from the web bundle packed into the APK (build/www, made by scripts/web/build-web.mjs) and
 # never loads the website. Run the bundle step first - this script refuses to continue without a verified bundle.
@@ -20,7 +23,11 @@
 set -euo pipefail
 
 MODE="${1:-full}"
-case "$MODE" in full | safe) ;; *) echo "usage: create-project.sh [full|safe]" >&2; exit 2 ;; esac
+case "$MODE" in
+  full | safe) ;;
+  nodb) MODE=full; export QR_NATIVE_DB=off ;;     # a full project, built without the Room annotation processor
+  *) echo "usage: create-project.sh [full|nodb|safe]" >&2; exit 2 ;;
+esac
 
 REPO="${GITHUB_WORKSPACE:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 PROJECT="${QR_PROJECT_DIR:-/tmp/app}"

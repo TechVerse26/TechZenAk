@@ -31,7 +31,7 @@ test('contract: every method of the TypeScript plugin interface is a @PluginMeth
   const ktMethods = [...kotlin.matchAll(/@PluginMethod[^\n]*\n(?:\s*\/\*\*[\s\S]*?\*\/\s*)?\s*fun\s+(\w+)\(call: PluginCall\)/g)].map((m) => m[1]).sort();
   assert.deepEqual(tsMethods, ktMethods);
   assert.ok(tsMethods.length >= 10, tsMethods.join(','));
-  assert.match(kotlin, /@CapacitorPlugin\(name = "QuranNative"\)/);
+  assert.match(kotlin, /@CapacitorPlugin\(\s*name = "QuranNative"/);
   assert.ok(read('js/quran-native.js').includes("c.Plugins['QuranNative']") && read('js/quran-native.js').includes("isPluginAvailable('QuranNative')"), 'the client asks for the plugin by the name Kotlin registers');
 });
 

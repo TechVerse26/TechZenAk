@@ -90,9 +90,12 @@
   function load(){
     var b = bridge(), a = api();
     if(!b || !a || !b.isAvailable()) return Promise.resolve(false);
+    var before = S.caps;
     return Promise.all([b.refreshCapabilities(), b.getReminders()]).then(function(r){
       S.caps = r[0];
       S.list = merge(a.defaultCatalog(lang()), r[1]);
+      // a permission was just given in the system settings: plan the alarms again at once (exact times, notifications allowed)
+      if(permissionGained(before, S.caps)) save();
       return true;
     });
   }
@@ -119,18 +122,50 @@
   }
   function renderNext(){ if(els.next) els.next.textContent = nextText(); }
 
+  // ---------- permissions ----------
+  // Notifications: Android 13+ asks at run time, so the person gets the SYSTEM DIALOG first. Only when that cannot help any more
+  // (the answer was "don't allow" twice, or notifications are switched off in the phone settings) the phone's own notification
+  // settings are opened - after a short explanation, so the button never feels like it does nothing. Resolves true when allowed.
+  function askNotifications(){
+    var b = bridge();
+    if(!b) return Promise.resolve(false);
+    return b.requestNotifications().then(function(res){
+      if(res && res.granted) return true;
+      return UI.confirm({
+        title: T('নোটিফিকেশনের অনুমতি দরকার', 'Notifications need your permission'),
+        text: T('রিমাইন্ডার দেখাতে নোটিফিকেশন চালু থাকতে হবে। ফোনের সেটিংস খুলে নোটিফিকেশন চালু করুন, তারপর অ্যাপে ফিরে আসুন।', 'Reminders can only be shown when notifications are on. Open the phone settings, switch notifications on, then come back to the app.'),
+        confirmLabel: T('সেটিংস খুলুন', 'Open settings')
+      }).then(function(ok){ if(ok) b.openSettings('notifications'); return false; });
+    });
+  }
+  // Precise alarms (Android 12+): there is no dialog for this one, the system page "Alarms & reminders" of the app is the way.
+  function askExactAlarms(){
+    var b = bridge();
+    if(!b) return Promise.resolve(false);
+    return b.openSettings('exact-alarms').then(function(opened){
+      if(!opened) UI.snack(T('সেটিংস খোলা যায়নি — ফোনের Settings > Apps > কুরআন বাংলা > Alarms & reminders থেকে চালু করুন', 'Could not open the settings - turn on Alarms & reminders in Settings > Apps > Quran Bangla'), { duration: 5000 });
+      return opened;
+    });
+  }
+  // true when notifications or exact alarms were off before and are on now
+  function permissionGained(before, now){
+    if(!before || !now) return false;
+    return (before.exactAlarms === false && now.exactAlarms === true) || (before.notificationsEnabled === false && now.notificationsEnabled === true);
+  }
+
   function permissionBlock(){
     var b = bridge(), c = S.caps, box = h('div', { class: 'qa-stack', style: { gap: '8px' } });
     if(!c) return box;
-    function line(text, icon, kind, label, screen){
-      var wrap = h('div', { class: 'qa-stack', style: { gap: '4px' } });
+    function line(text, icon, kind, label, onClick, primary){
+      var wrap = h('div', { class: 'qa-stack', style: { gap: '8px' } });
       wrap.appendChild(UI.banner(text, icon, kind));
-      wrap.appendChild(UI.linkButton(label, function(){ b.openSettings(screen); }));
+      wrap.appendChild(primary ? UI.button(label, { kind: 'filled', block: true, onClick: onClick }) : UI.linkButton(label, onClick));
       box.appendChild(wrap);
     }
-    if(c.notificationsEnabled === false) line(T('নোটিফিকেশন বন্ধ আছে — রিমাইন্ডার দেখা যাবে না।', 'Notifications are off - reminders cannot be shown.'), 'bell', '', T('নোটিফিকেশন সেটিংস', 'Notification settings'), 'notifications');
-    if(c.exactAlarms === false && c.sdk >= 31) line(T('নির্ভুল অ্যালার্মের অনুমতি নেই: রিমাইন্ডার কয়েক মিনিট দেরিতে আসতে পারে।', 'Precise alarms are not allowed: reminders may be a few minutes late.'), 'clock', 'info', T('নির্ভুল অ্যালার্মের অনুমতি দিন', 'Allow precise alarms'), 'exact-alarms');
-    if(c.ignoringBatteryOptimizations === false) line(T('কিছু ফোন ব্যাটারি বাঁচাতে অ্যালার্ম বন্ধ করে দেয়। দরকার হলে অ্যাপটিকে ব্যাটারি সীমাবদ্ধতা থেকে বাদ দিন।', 'Some phones stop alarms to save battery. If reminders are missed, exclude the app from battery optimisation.'), 'info', 'info', T('ব্যাটারি সেটিংস', 'Battery settings'), 'battery');
+    function refresh(){ return load().then(render); }
+    if(c.notificationsEnabled === false) line(T('নোটিফিকেশন বন্ধ আছে — রিমাইন্ডার দেখা যাবে না।', 'Notifications are off - reminders cannot be shown.'), 'bell', '', T('নোটিফিকেশনের অনুমতি দিন', 'Allow notifications'), function(){ askNotifications().then(refresh); }, true);
+    if(c.exactAlarms === false && c.sdk >= 31) line(T('নির্ভুল অ্যালার্মের অনুমতি নেই: রিমাইন্ডার কয়েক মিনিট দেরিতে আসতে পারে।', 'Precise alarms are not allowed: reminders may be a few minutes late.'), 'clock', 'info', T('নির্ভুল অ্যালার্মের অনুমতি দিন', 'Allow precise alarms'), function(){ askExactAlarms(); }, true);
+    if(c.ignoringBatteryOptimizations === false) line(T('কিছু ফোন ব্যাটারি বাঁচাতে অ্যালার্ম বন্ধ করে দেয়। দরকার হলে অ্যাপটিকে ব্যাটারি সীমাবদ্ধতা থেকে বাদ দিন।', 'Some phones stop alarms to save battery. If reminders are missed, exclude the app from battery optimisation.'), 'info', 'info', T('ব্যাটারি সেটিংস', 'Battery settings'), function(){ b.openSettings('battery'); }, false);
     return box;
   }
 
@@ -152,7 +187,14 @@
   function section(titleBn, titleEn, group){
     var rows = [];
     S.list.filter(function(r){ return groupOf(r) === group; }).forEach(function(r){
-      rows.push(UI.switchRow({ icon: 'bell', title: r.title, sub: describe(r, QRApp.isBn()), checked: r.enabled, onChange: function(v){ r.enabled = v; var p = save(); render(); return p; } }));
+      rows.push(UI.switchRow({ icon: 'bell', title: r.title, sub: describe(r, QRApp.isBn()), checked: r.enabled, onChange: function(v){
+        r.enabled = v;
+        var p = save();
+        render();
+        // the first reminder that is switched on asks for what it needs: the notification permission right away
+        if(v && S.caps && S.caps.notificationsEnabled === false) askNotifications().then(function(){ return load(); }).then(render);
+        return p;
+      } }));
       if(r.enabled && fixedTime(r)) rows.push(timeRow(r));
     });
     if(!rows.length) return null;
@@ -204,6 +246,6 @@
     open: function(){ if(Nav && Nav.push) Nav.push('reminders'); },
     available: function(){ var b = bridge(); return !!(b && b.isAvailable()); },
     // exported for tests/reminders-ui.test.js
-    core: { merge: merge, styleOf: styleOf, applyStyle: applyStyle, groupOf: groupOf, describe: describe, toHHMM: toHHMM, toMinutes: toMinutes, fixedTime: fixedTime }
+    core: { merge: merge, styleOf: styleOf, applyStyle: applyStyle, groupOf: groupOf, describe: describe, toHHMM: toHHMM, toMinutes: toMinutes, fixedTime: fixedTime, permissionGained: permissionGained, askNotifications: askNotifications, askExactAlarms: askExactAlarms }
   };
 })();

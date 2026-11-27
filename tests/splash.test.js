@@ -1,111 +1,122 @@
 'use strict';
-// Static checks of the Android launch splash (Lottie): no browser needed, runs with `npm test`.
-// The browser run (real app + simulated Android shell) is tests/ui/splash.ui.test.js.
+// The Android launch splash is drawn in code: app/js/splash.js (inline SVG + CSS animation), started by js/platform.js, in the app only.
+// These tests need no browser: they read the source files and check the contract between them. The behaviour in a real browser is
+// tests/ui/splash.ui.test.js.
+//
+//   node --test tests/splash.test.js
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
-const crypto = require('node:crypto');
-const { execFileSync } = require('node:child_process');
 
 const ROOT = path.resolve(__dirname, '..');
-const read = (p) => fs.readFileSync(path.join(ROOT, p), 'utf8');
-const exists = (p) => fs.existsSync(path.join(ROOT, p));
-const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
+const read = (f) => fs.readFileSync(path.join(ROOT, f), 'utf8');
+const exists = (f) => fs.existsSync(path.join(ROOT, f));
+// source without comments (a // inside a string is not met in these files)
+const code = (f) => read(f).replace(/^\s*\/\/.*$/gm, '').replace(/\s\/\/\s.*$/gm, '');
 
-const ANIMATION = 'assets/animations/quran-bangla-splash.json';
-// sha256 of the animation exactly as the owner supplied it. The animation must stay untouched: if it is replaced ON PURPOSE,
-// update this value in the same commit.
-const ORIGINAL_SHA256 = 'abb25d9b8796f37179e2c49abe0c09bed7223d5b4a89125c82300788798e4f41';
+const SPLASH = 'app/js/splash.js';
+const text = read(SPLASH);
 
-// the JavaScript of a file without // and /* */ comments (good enough for the string checks below)
-const code = (p) => read(p).replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"\\])\/\/.*$/gm, '$1');
+// the artwork arrays of splash.js, evaluated on their own
+function artwork() {
+  const grab = (name) => {
+    const m = new RegExp('var ' + name + ' = (\\[[\\s\\S]*?\\n  \\]);').exec(text);
+    assert.ok(m, name + ' array found');
+    return vm.runInNewContext(m[1]);
+  };
+  return { logo: grab('LOGO'), word: grab('WORD') };
+}
+// the bounding box of a path made of "M x y l dx dy ... z" (absolute start, relative lines - how the artwork is stored)
+function bbox(d) {
+  const nums = (s) => (s.match(/-?\d*\.?\d+/g) || []).map(Number);
+  const out = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
+  let n = 0;
+  for (const sub of d.split('M').filter(Boolean)) {
+    const [start, rest] = sub.split('l');
+    const [x0, y0] = nums(start);
+    let x = x0, y = y0;
+    const add = () => { out.x0 = Math.min(out.x0, x); out.x1 = Math.max(out.x1, x); out.y0 = Math.min(out.y0, y); out.y1 = Math.max(out.y1, y); n++; };
+    add();
+    const v = nums(rest.replace(/z\s*$/, ''));
+    assert.equal(v.length % 2, 0, 'pairs of numbers');
+    for (let i = 0; i < v.length; i += 2) { x += v[i]; y += v[i + 1]; add(); }
+  }
+  out.points = n;
+  return out;
+}
 
-test('the animation is the original file, byte for byte', () => {
-  assert.equal(sha256(fs.readFileSync(path.join(ROOT, ANIMATION))), ORIGINAL_SHA256);
+test('there is no animation JSON, no Lottie runtime and no vendoring tool any more', () => {
+  for (const f of ['assets/animations/quran-bangla-splash.json', 'assets/vendor/lottie/lottie_svg.min.js', 'android-build/vendor-lottie.mjs', '.github/workflows/vendor-lottie.yml', 'docs/LOTTIE_SPLASH_BN.md', 'tests/helpers/lottie-runtime-stub.js']) {
+    assert.ok(!exists(f), f + ' was removed');
+  }
+  assert.ok(!/"assets"/.test(read('scripts/web/bundle-config.json')), 'the bundle no longer lists the removed assets/ folder (the build stops when a listed folder is missing)');
+  const grep = (f) => /lottie|bodymovin|quran-bangla-splash\.json/i.test(code(f));
+  for (const f of [SPLASH, 'js/platform.js', 'app/js/boot.js', 'app/js/native.js']) assert.ok(!grep(f), f + ' does not mention Lottie');
 });
 
-test('the animation keeps its original composition', () => {
-  const a = JSON.parse(read(ANIMATION));
-  assert.equal(a.w, 1080);
-  assert.equal(a.h, 1920);
-  assert.equal(a.fr, 30);
-  assert.equal(a.ip, 0);
-  assert.equal(a.op, 96);
-  assert.equal(a.layers.length, 4);
-  const solid = a.layers.find((l) => l.ty === 1);
-  assert.equal(String(solid.sc).toUpperCase(), '#FFFFFF', 'pure white background');
-});
-
-test('js/platform.js starts the splash only inside the app, after the website early-return', () => {
-  const text = code('js/platform.js');
-  const earlyReturn = text.indexOf('if(!P.isApp) return;');
-  assert.ok(earlyReturn > 0, 'the website early-return exists');
-  const before = text.slice(0, earlyReturn);
-  assert.doesNotMatch(before, /lottie|SPLASH_FILES|qa-splash|app\/js\/splash|assets\/animations/i, 'nothing about the Lottie splash before the early-return');
-  const files = text.indexOf('var SPLASH_FILES');
-  assert.ok(files > earlyReturn, 'SPLASH_FILES is defined after the early-return');
-  assert.ok(text.indexOf('s.src = SPLASH_FILES.script') > earlyReturn, 'splash.js is injected after the early-return');
-});
-
-test('js/platform.js hands the right files to the splash', () => {
-  const m = /var SPLASH_FILES\s*=\s*\{([\s\S]*?)\}/.exec(read('js/platform.js'));
-  const files = Object.fromEntries([...m[1].matchAll(/(\w+)\s*:\s*'([^']+)'/g)].map((x) => [x[1], x[2]]));
-  assert.deepEqual(files, {
-    script: 'app/js/splash.js',
-    runtime: 'assets/vendor/lottie/lottie_svg.min.js',
-    data: ANIMATION,
-    fallback: 'icons/icon-512.png'
-  });
-  for (const k of ['script', 'data', 'fallback']) assert.ok(exists(files[k]), files[k] + ' exists');
+test('js/platform.js starts the splash only inside the app, after the website early-return, with one file', () => {
+  const p = code('js/platform.js');
+  const stop = p.indexOf('if(!P.isApp) return;');
+  const start = p.indexOf('startSplash');
+  assert.ok(stop > 0 && start > stop, 'the website returns before the splash is even defined');
+  const m = /var SPLASH_FILES\s*=\s*\{([\s\S]*?)\}/.exec(p);
+  assert.ok(m, 'SPLASH_FILES found');
+  assert.deepEqual([...m[1].matchAll(/(\w+)\s*:\s*'([^']+)'/g)].map((x) => [x[1], x[2]]), [['script', SPLASH]], 'exactly one file: the script');
+  assert.ok(exists(SPLASH));
+  assert.match(p, /s\.src = SPLASH_FILES\.script;/);
+  assert.doesNotMatch(p, /rel: 'preload'[^}]*splash/, 'nothing else is preloaded for the splash');
+  assert.ok(!/APP_SCRIPTS\s*=\s*\[[^\]]*splash/.test(p), 'splash.js is not in APP_SCRIPTS (those run only after DOMContentLoaded)');
 });
 
 test('the existing native splash / boot safety nets are unchanged', () => {
-  const text = code('js/platform.js');
-  assert.match(text, /var BOOT_TIMEOUT_MS = 12000;/);
-  assert.match(text, /setTimeout\(hideSplash, 9000\)/);
-  assert.match(text, /SplashScreen\.hide\(\{ fadeOutDuration: 180 \}\)/);
-  assert.match(text, /P\.markReady = function/);
-  assert.match(text, /P\.fail = function/);
+  const p = code('js/platform.js');
+  assert.match(p, /var BOOT_TIMEOUT_MS = 12000;/);
+  assert.match(p, /setTimeout\(hideSplash, 9000\)/);
+  assert.match(p, /c\.Plugins\.SplashScreen\.hide\(\{ fadeOutDuration: 180 \}\)/);
+  assert.match(read('android-build/apply-native-patches.mjs'), /launchShowDuration:\s*8000/);
 });
 
-test('markReady() leaves the native splash to the Lottie splash while it holds it; fail() always releases it', () => {
-  const text = code('js/platform.js');
-  assert.match(text, /if\(!\(P\.splash && P\.splash\.holdsNative\)\) hideSplash\(\);/);
-  const fail = /P\.fail = function[\s\S]*?\n  \};/.exec(text)[0];
-  assert.match(fail, /P\.splash\.holdsNative = false;[\s\S]*hideSplash\(\);/);
+test('markReady() leaves the native splash to the splash while it holds it; fail() always releases it', () => {
+  const p = code('js/platform.js');
+  assert.match(p, /if\(!\(P\.splash && P\.splash\.holdsNative\)\) hideSplash\(\)/);
+  assert.match(p, /if\(P\.splash\) P\.splash\.holdsNative = false;\s*hideSplash\(\);/);
+  assert.match(p, /var splash = P\.splash = \{ holdsNative: !!P\.isNative, started: false, gaveUp: false, files: SPLASH_FILES \}/);
 });
 
 test('platform.js has its own last-resort timer, so a broken splash.js can never keep the overlay on screen', () => {
-  const text = code('js/platform.js');
-  assert.match(text, /var SPLASH_START_TIMEOUT_MS = 5000;/);
-  assert.match(text, /var SPLASH_LAST_RESORT_MS = 16000;/);
-  assert.match(text, /s\.onerror = function\(\)\{ giveUp\(/);
+  const p = code('js/platform.js');
+  assert.match(p, /var SPLASH_LAST_RESORT_MS = 16000;/);
+  assert.match(p, /setTimeout\(lastResort, SPLASH_LAST_RESORT_MS\)/);
+  assert.match(p, /s\.onerror = function\(\)\{ giveUp\('app\/js\/splash\.js failed to load'\); \}/);
+  assert.match(p, /SPLASH_START_TIMEOUT_MS = 5000/);
 });
 
 test('the website never references the launch splash', () => {
-  assert.doesNotMatch(read('index.html'), /lottie|quran-bangla-splash|app\/js\/splash|assets\/animations/i);
-  for (const f of ['js/data.js', 'sw.js']) {
-    const text = read(f);
-    for (const name of ['APP_SHELL_CORE', 'APP_SHELL_DEFERRED']) {
-      const m = new RegExp('(?:const|let|var)\\s+' + name + '\\s*=\\s*\\[([\\s\\S]*?)\\]\\s*;').exec(text);
-      if (m) assert.doesNotMatch(m[1], /lottie|splash|assets\/animations/i, `${f} ${name}`);
-    }
+  assert.doesNotMatch(read('index.html'), /splash\.js|qa-splash/);
+  const data = read('js/data.js');
+  for (const name of ['APP_SHELL_CORE', 'APP_SHELL_DEFERRED']) {
+    const m = new RegExp('(?:const|let|var)\\s+' + name + '\\s*=\\s*\\[([\\s\\S]*?)\\]\\s*;').exec(data);
+    assert.ok(m);
+    assert.doesNotMatch(m[1], /splash|lottie/i, name + ' does not list splash files');
   }
+  assert.doesNotMatch(read('sw.js'), /splash/i);
+  for (const f of fs.readdirSync(path.join(ROOT, 'css'))) if (f.endsWith('.css')) assert.doesNotMatch(read('css/' + f), /qa-splash|qa-sp-/, 'css/' + f);
 });
 
-test('the app asks the service worker to keep the splash files for offline starts', () => {
+test('the app asks the service worker to keep the splash script for offline starts', () => {
   const boot = code('app/js/boot.js');
   assert.match(boot, /P\.splash && P\.splash\.files/);
-  assert.match(boot, /\[sp\.script, sp\.runtime, sp\.data\]/);
+  assert.match(boot, /\[sp\.script\]\.filter\(Boolean\)/);
+  assert.match(code(SPLASH), /type: 'CACHE_ASSETS', urls: \[FILES\.script \|\| 'app\/js\/splash\.js'\]/);
 });
 
-test('the service-worker cache generation was bumped (platform.js / boot.js / native.js are served cache-first)', () => {
+test('the service-worker cache generation was bumped (platform.js / boot.js / native.js / splash.js are served cache-first)', () => {
   const m = /const SW_VERSION = '(v\d+\.\d+\.\d+\.\d+)'/.exec(read('js/data.js'));
   assert.ok(m, 'SW_VERSION found');
-  assert.notEqual(m[1], 'v1.03.03.01808', 'the pre-splash cache generation');
+  assert.notEqual(m[1], 'v1.03.03.01810', 'the generation before the code-drawn splash and the permission / widget screens');
+  assert.notEqual(m[1], 'v1.03.03.01808');
 });
 
 test('native.js keeps its hands off the system bars while the splash holds them', () => {
@@ -113,107 +124,106 @@ test('native.js keeps its hands off the system bars while the splash holds them'
   assert.match(nat, /var hold = P\.splash;\s*if\(hold && hold\.barsHeld\)\{ hold\.pendingScheme = scheme; return; \}/);
 });
 
-test('splash.js hands the splash files to the service worker right after they loaded (offline starts)', () => {
-  const text = code('app/js/splash.js');
-  assert.match(text, /type: 'CACHE_ASSETS', urls: \[FILES\.script \|\| 'app\/js\/splash\.js', RUNTIME_URL, DATA_URL\]/);
-  assert.match(text, /cancel\('assets'\);\s*keepOffline\(\);\s*init\(r\[1\]\);/);
+test('splash.js is self-contained: no network, no JSON, no URL, no other file', () => {
+  const c = code(SPLASH);
+  assert.doesNotMatch(c, /\bfetch\s*\(|XMLHttpRequest|\bimport\s*\(|https?:\/\/|\.json['"]|\bnew Image\b|<img|<image|url\(\s*['"]?(?!#)/i);
+  assert.doesNotMatch(c, /createElement\('script'\)|createElement\("script"\)|\.src\s*=/, 'it loads no script either');
+  new vm.Script(text);        // and it is valid JavaScript
 });
 
-test('the vendor workflow starts by itself when the script is pushed, and cannot loop', () => {
-  const y = read('.github/workflows/vendor-lottie.yml');
-  assert.match(y, /workflow_dispatch:/);
-  assert.match(y, /push:\s*\n\s*paths:\s*\n\s*- 'android-build\/vendor-lottie\.mjs'/);
-  assert.match(y, /contents: write/);
-  assert.match(y, /git add assets\/vendor\/lottie\b/);
-  const paths = /paths:\s*\n((?:\s*- .*\n)+)/.exec(y)[1];
-  assert.doesNotMatch(paths, /assets\//, 'the files it commits must not be a trigger path');
+test('splash.js does nothing when it is not the Android app (website guard), nothing twice, nothing after platform.js gave up', () => {
+  const c = code(SPLASH);
+  assert.match(c, /if\(!P \|\| !P\.isApp \|\| !S \|\| S\.started \|\| S\.gaveUp\) return;\s*S\.started = true;/);
+  // run it as the website: no QR_PLATFORM / not the app -> nothing is created
+  const created = [];
+  const doc = { documentElement: { appendChild: () => created.push('overlay') }, head: { appendChild: () => created.push('style') }, getElementById: () => null, createElement: () => ({}) };
+  for (const P of [undefined, { isApp: false, splash: {} }, { isApp: true, splash: { started: true } }, { isApp: true, splash: { gaveUp: true } }, { isApp: true }]) {
+    vm.runInNewContext(text, { window: { QR_PLATFORM: P, addEventListener() {}, matchMedia: () => ({ matches: false }) }, document: doc, console, setTimeout, clearTimeout, performance: { now: () => 0 }, Object, Array, Date, Math, CustomEvent: function () {} });
+  }
+  assert.deepEqual(created, [], 'no overlay, no style');
 });
 
-test('the vendor workflow commits the files first; the real-runtime check comes after and can never block it', () => {
-  const y = read('.github/workflows/vendor-lottie.yml');
-  const commit = y.indexOf('- name: Commit the vendored files');
-  const check = y.indexOf('- name: Check the real animation with the real runtime');
-  assert.ok(commit > 0 && check > commit, 'commit step first, check step after it');
-  const checkStep = y.slice(check, y.indexOf('- name: Keep the rendered frames'));
-  assert.match(checkStep, /continue-on-error: true/);
-  assert.match(checkStep, /node --test tests\/ui\/splash\.real\.ui\.test\.js/);
-  assert.match(y, /uses: actions\/upload-artifact@v4[\s\S]*name: splash-real-frames/);
-  for (const f of ['tests/ui/splash.real.ui.test.js', 'tests/helpers/splash-harness.js']) assert.ok(exists(f), f + ' exists');
+test('the artwork is intact: 9 logo contours, 11 wordmark letters, every path closed, everything inside its viewBox', () => {
+  const { logo, word } = artwork();
+  assert.equal(logo.length, 9, 'the logo has 9 contours');
+  assert.equal(word.length, 11, 'Quran Bangla = 11 letters');
+  const L = { x0: -172, y0: -147, x1: 172, y1: 147 }, W = { x0: -117, y0: -19, x1: 117, y1: 19 };
+  let points = 0;
+  for (const d of logo) {
+    assert.match(d, /^M[-\d. ]+l[-\d. ]+z$/, 'a closed polygon');
+    const b = bbox(d); points += b.points;
+    assert.ok(b.x0 >= L.x0 && b.x1 <= L.x1 && b.y0 >= L.y0 && b.y1 <= L.y1, 'inside the logo viewBox ' + JSON.stringify(b));
+  }
+  assert.ok(points > 600, 'the traced logo keeps its detail (' + points + ' points)');
+  let prev = -1;
+  for (const [d, delay] of word) {
+    assert.match(d, /^M[-\d. ]+l[-\d. ]+z(M[-\d. ]+l[-\d. ]+z)*$/, 'closed polygons (a letter and its counters)');
+    const b = bbox(d);
+    assert.ok(b.x0 >= W.x0 && b.x1 <= W.x1 && b.y0 >= W.y0 && b.y1 <= W.y1, 'inside the wordmark viewBox ' + JSON.stringify(b));
+    assert.ok(delay >= 0 && delay <= 1 && delay >= prev, 'the letters are staggered from left to right');
+    prev = delay;
+  }
+  assert.equal(word[0][1], 0); assert.equal(word[word.length - 1][1], 1);
 });
 
-test('splash.js loads nothing from the internet (no CDN)', () => {
-  assert.doesNotMatch(code('app/js/splash.js'), /https?:\/\//);
+test('the splash colour is the native splash colour (no colour jump when the native splash hands over)', () => {
+  const theme = JSON.parse(read('manifest.json')).theme_color;
+  const bg = /var BG = '(#[0-9A-Fa-f]{6})'/.exec(text);
+  assert.ok(bg, 'BG found in splash.js');
+  assert.equal(bg[1].toLowerCase(), theme.toLowerCase(), 'splash.js BG = manifest.json theme_color');
+  // the patcher paints the native splash (qr_splash_background, windowSplashScreenBackground) with that same theme colour
+  const patch = read('android-build/apply-native-patches.mjs');
+  assert.match(patch, /qr_splash_background">' \+ ctx\.theme/);
+  assert.match(text, /background:' \+ BG \+ ';opacity:1;/, 'the overlay itself has that colour');
 });
 
-function runSplashScript(platform) {
-  const calls = [];
-  const note = (name) => () => { calls.push(name); return null; };
-  const win = {
-    QR_PLATFORM: platform,
-    addEventListener: note('window.addEventListener'),
-    removeEventListener: note('window.removeEventListener'),
-    dispatchEvent: note('window.dispatchEvent'),
-    performance: { now: () => 1 },
-    console
-  };
-  const doc = { documentElement: {}, head: null, createElement: note('createElement'), getElementById: note('getElementById') };
-  win.window = win; win.document = doc;
-  vm.createContext(win);
-  vm.runInContext(fs.readFileSync(path.join(ROOT, 'app/js/splash.js'), 'utf8'), win, { filename: 'app/js/splash.js' });
-  return calls;
-}
-
-test('splash.js does nothing when it is not the Android app (website guard)', () => {
-  assert.deepEqual(runSplashScript({ isApp: false, splash: { files: {} } }), [], 'isApp is false');
-  assert.deepEqual(runSplashScript({ isApp: false }), []);
-  assert.deepEqual(runSplashScript(undefined), []);
+test('the first frame is the plain splash colour: every layer on top of it fades in from nothing', () => {
+  assert.match(text, /\.qa-sp-vignette\{[^}]*animation:qa-sp-in 900ms ease-out both;/);
+  assert.match(text, /\.qa-sp-glow\{[^}]*animation:qa-sp-in 1200ms ease-out both/);
+  assert.match(text, /\.qa-sp-fill\{[^}]*animation:qa-sp-in 650ms/);
+  assert.match(text, /\.qa-sp-line\{[^}]*stroke-dashoffset:1;/, 'the lines start undrawn');
+  assert.match(text, /\.qa-sp-bar\{[^}]*animation:qa-sp-in 500ms/);
+  assert.match(text, /el\.className = 'qa-sp-wait'/, 'created paused ...');
+  assert.match(text, /el\.classList\.remove\('qa-sp-wait'\)/, '... and started only after the first frame and the native fade');
+  assert.match(text, /'#qa-splash\.qa-sp-wait \*\{animation-play-state:paused!important;\}'/);
 });
 
-test('splash.js does nothing twice, and nothing after platform.js gave up on it', () => {
-  assert.deepEqual(runSplashScript({ isApp: true, splash: { started: true, files: {} } }), []);
-  assert.deepEqual(runSplashScript({ isApp: true, splash: { gaveUp: true, files: {} } }), []);
+test('smooth by construction: only transform / opacity / stroke are animated - no blur, shadow, filter, mask or layout property', () => {
+  const css = /var CSS =([\s\S]*?);\n\n  var el = null/.exec(text);
+  assert.ok(css, 'CSS found');
+  const style = css[1];
+  assert.doesNotMatch(style, /filter\s*:|blur\(|box-shadow|text-shadow|backdrop-filter|mask|clip-path/i);
+  for (const m of style.matchAll(/@keyframes ([\w-]+)\{([^@]*?\}\})/g)) {
+    const props = [...m[2].matchAll(/([a-z-]+)\s*:/g)].map((x) => x[1]);
+    for (const p of props) assert.ok(['opacity', 'transform', 'stroke-dashoffset', 'stroke-opacity'].includes(p), `@keyframes ${m[1]} animates "${p}"`);
+  }
+  assert.match(style, /will-change:transform,opacity/);
 });
 
-test('vendor-lottie.mjs pins the lottie-web version the animation was exported for', () => {
-  const pinned = /const VERSION = '([^']+)'/.exec(read('android-build/vendor-lottie.mjs'))[1];
-  assert.equal(pinned, JSON.parse(read(ANIMATION)).v);
+test('"remove animations" (prefers-reduced-motion) gets the finished logo and one calm fade', () => {
+  assert.match(text, /prefers-reduced-motion: reduce/);
+  assert.match(text, /'#qa-splash\.qa-sp-still \*\{animation:none!important;\}'/);
+  assert.match(text, /still: 1100/);
 });
 
-test('a vendored lottie-web runtime (when present) matches its VERSION.json and has its license', (t) => {
-  if (!exists('assets/vendor/lottie/lottie_svg.min.js')) return t.skip('runtime not vendored yet - run the "Vendor Lottie runtime" workflow');
-  const meta = JSON.parse(read('assets/vendor/lottie/VERSION.json'));
-  assert.equal(meta.name, 'lottie-web');
-  assert.equal(meta.version, JSON.parse(read(ANIMATION)).v);
-  assert.equal(sha256(fs.readFileSync(path.join(ROOT, 'assets/vendor/lottie/lottie_svg.min.js'))), meta.sha256);
-  assert.ok(['LICENSE.md', 'LICENSE', 'LICENSE.txt'].some((n) => exists('assets/vendor/lottie/' + n)), 'license kept next to the code');
+test('timing: a splash worth watching, never a wait', () => {
+  const t = (n) => Number(new RegExp(n + ':\\s*(\\d+)').exec(text)[1]);
+  assert.ok(t('minShow') >= 1500 && t('minShow') <= 2600, 'the animation plays about two seconds');
+  assert.ok(t('leave') <= 500, 'a quick fade-out');
+  assert.ok(t('nativeFade') >= 180, 'starts after the native fade (platform.js uses 180 ms)');
+  assert.ok(t('hardCap') < 16000, 'inside the last-resort timer of platform.js');
+  assert.ok(t('afterPaint') <= 300);
+  // the leave rule: both the animation and the app UI
+  assert.match(text, /function maybeFinish\(\)\{\s*if\(finished \|\| !animDone \|\| !appReady\) return;\s*leave\(\);/);
 });
 
-test('vendor-lottie.mjs copies player + license + version info out of an npm tarball (offline, fake package)', (t) => {
-  let hasNpm = true;
-  try { execFileSync('npm', ['--version'], { stdio: 'ignore', shell: process.platform === 'win32' }); } catch (e) { hasNpm = false; }
-  if (!hasNpm) return t.skip('npm is not available');
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'vendor-lottie-test-'));
-  try {
-    const pkg = path.join(tmp, 'pkg');
-    fs.mkdirSync(path.join(pkg, 'build', 'player'), { recursive: true });
-    fs.writeFileSync(path.join(pkg, 'package.json'), JSON.stringify({ name: 'lottie-web', version: JSON.parse(read(ANIMATION)).v, license: 'MIT' }));
-    fs.writeFileSync(path.join(pkg, 'LICENSE.md'), 'fake license for the test\n');
-    const player = 'var lottie={loadAnimation:function(){}};' + '/*pad*/'.repeat(12000);
-    fs.writeFileSync(path.join(pkg, 'build', 'player', 'lottie_svg.min.js'), player);
-    execFileSync('npm', ['pack', '--silent'], { cwd: pkg, stdio: 'ignore', shell: process.platform === 'win32' });
-    const tgz = fs.readdirSync(pkg).find((f) => f.endsWith('.tgz'));
-    const repo = path.join(tmp, 'repo');
-    fs.mkdirSync(repo);
-    const run = (extra) => execFileSync(process.execPath, [path.join(ROOT, 'android-build', 'vendor-lottie.mjs')], {
-      env: Object.assign({}, process.env, { VENDOR_LOTTIE_REPO: repo, LOTTIE_TARBALL: path.join(pkg, tgz) }, extra), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']
-    });
-    run();
-    const out = path.join(repo, 'assets', 'vendor', 'lottie');
-    assert.equal(fs.readFileSync(path.join(out, 'lottie_svg.min.js'), 'utf8'), player, 'the player is copied unchanged');
-    assert.equal(fs.readFileSync(path.join(out, 'LICENSE.md'), 'utf8'), 'fake license for the test\n');
-    const meta = JSON.parse(fs.readFileSync(path.join(out, 'VERSION.json'), 'utf8'));
-    assert.equal(meta.sha256, sha256(Buffer.from(player)));
-    assert.match(run(), /already up to date/);
-    assert.throws(() => run({ LOTTIE_SHA256: 'deadbeef' }), /sha256 mismatch|Command failed/);
-  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+test('the system bars take the splash colour while it is up (and only when it is not the website)', () => {
+  assert.match(text, /function holdBars\(\)\{\s*if\(barsHeld \|\| !P\.isNative\) return;[\s\S]*paintBars\(BG, 'DARK'\)/);
+  assert.match(text, /N\.setSystemBars\(scheme\)/);
+});
+
+test('accessibility: the overlay is one labelled image, the artwork is hidden from screen readers', () => {
+  assert.match(text, /setAttribute\('role', 'img'\)/);
+  assert.match(text, /setAttribute\('aria-label', 'Quran Bangla'\)/);
+  assert.equal((text.match(/aria-hidden="true"/g) || []).length >= 4, true);
 });
